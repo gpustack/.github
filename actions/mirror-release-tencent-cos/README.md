@@ -14,29 +14,30 @@ jobs:
 ## Input
 
 ```yaml
-inputs:
-  region:
-    description: 'Tencent COS region where the bucket belong to.'
+  tencent-secret-id:
+    description: 'Tencent Cloud secret ID which can upload release assets to COS.'
     required: true
-  bucket:
-    description: 'Tencent COS available bucket ID.'
-    required: true
-  secret-id:
-    description: 'Tencent Cloud secret ID which can write COS.'
-    required: true
-  secret-key:
+  tencent-secret-key:
     description: 'Tencent Cloud secret key which belong to the secret ID.'
     required: true
+  tencent-cos-region:
+    description: 'Tencent COS region where the bucket belong to.'
+    required: false
+    default: 'ap-guangzhou'
+  tencent-cos-bucket:
+    description: 'Tencent COS available bucket ID.'
+    required: false
+    default: 'gpustack-1303613262'
   max-releases: 
     description: 'Numer of the latest releases to mirror.'
     required: false
     default: '1'
   github-token:
-    description: 'The Github token to donwload releases from Github repository, usually inherit from the composition action.'
+    description: 'Github token to donwload release assets from Github repository, usually inherit from the composition action.'
     required: false
     default: ''
   github-repository:
-    description: 'The target Github repository, inform of "owner/name", usually inherit from the composition action.'
+    description: 'Source Github repository, inform of "owner/name", usually inherit from the composition action.'
     required: false
     default: ''
   dry-run:
