@@ -15,7 +15,7 @@ on:
       prune:
         description: 'Prune all caches'
         required: false
-        type: bool
+        type: boolean
         default: false
 
 jobs:
