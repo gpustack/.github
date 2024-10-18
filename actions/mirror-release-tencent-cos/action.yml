@@ -1,0 +1,102 @@
+name: 'Mirror Release to Tencent COS'
+description: 'Mirror the Github Release to Tencent COS.'
+
+inputs:
+  tencent-secret-id:
+    description: 'Tencent Cloud secret ID which can upload release assets to COS.'
+    required: true
+  tencent-secret-key:
+    description: 'Tencent Cloud secret key which belong to the secret ID.'
+    required: true
+  tencent-cos-region:
+    description: 'Tencent COS region where the bucket belong to.'
+    required: false
+    default: 'ap-guangzhou'
+  tencent-cos-bucket:
+    description: 'Tencent COS available bucket ID.'
+    required: false
+    default: 'gpustack-1303613262'
+  max-releases: 
+    description: 'Numer of the latest releases to mirror.'
+    required: false
+    default: '1'
+  github-token:
+    description: 'Github token to donwload release assets from Github repository, usually inherit from the composition action.'
+    required: false
+    default: ''
+  github-repository:
+    description: 'Source Github repository, inform of "owner/name", usually inherit from the composition action.'
+    required: false
+    default: ''
+  dry-run:
+    description: 'Skip writing operations.'
+    required: false
+    default: 'false'
+
+runs:
+  using: "composite"
+  steps:
+    - name: Sync
+      shell: bash
+      env:
+        TENCENT_SECRET_ID: "${{ inputs.tencent-secret-id }}"
+        TENCENT_SECRET_KEY: "${{ inputs.tencent-secret-key }}"
+        TENCENT_COS_REGION: "${{ inputs.tencent-cos-region }}"
+        TENCENT_COS_BUCKET: "${{ inputs.tencent-cos-bucket }}"
+        MAX_RELEASES: "${{ inputs.max-releases }}"
+        GITHUB_TOKEN: "${{ inputs.github-token && inputs.github-token || github.token }}"
+        GITHUB_REPOSITORY: "${{ inputs.github-repository && inputs.github-repository || github.repository }}"
+        DRY_RUN: "${{ inputs.dry-run == 'true' }}"
+      run: |
+        #!/usr/bin/env bash
+          
+        set -e
+        
+        shopt -s expand_aliases
+        alias gh="gh --repo ${GITHUB_REPOSITORY}"
+        alias curl="curl --insecure --silent --retry 3"
+        alias jq="jq -c"
+        
+        info() {
+          echo "[INFO] $*"
+        }
+        warn() {
+          echo "[WARN] $*"
+        }
+        error() {
+          echo "[ERRO] $*"
+        }
+        fatal() {
+          echo "[FATA] $*"
+          exit 1
+        }
+
+        info "Configuring Tencent COS CLI..."
+        curl -o /tmp/coscli -L -X GET https://github.com/tencentyun/coscli/releases/download/v1.0.1/coscli-v1.0.1-linux-amd64 && chmod a+x /tmp/coscli
+        export PATH="/tmp:${PATH}"
+        coscli config set --secret_id "${TENCENT_SECRET_ID}" --secret_key "${TENCENT_SECRET_KEY}" --init-skip
+        coscli config add -b "${TENCENT_COS_BUCKET}" -r "${TENCENT_COS_REGION}" --init-skip
+        
+        info "Releasing to Tencent COS bucket..."
+        # create tencentcos release if not exists
+        gh release list --json name,tagName,isPrerelease,isDraft --order desc --limit ${MAX_RELEASES} | jq -r 'reverse | .[]' | while read -r release; do
+          RELEASE_IS_PRERELEASE=$(echo "${release}" | jq -r '.isPrerelease')
+          RELEASE_TAG_NAME=$(echo "${release}" | jq -r '.tagName')
+          if [[ "$(echo "${release}" | jq -r '.isDraft')" == "true" ]]; then
+            warn "  Skipped creating invalid release ${RELEASE_TAG_NAME}, continue..."
+            continue
+          fi
+          
+          info "  Syncing Tencent COS release ${RELEASE_TAG_NAME}..."
+          # download assets
+          info "    Downloading assets..."
+          gh release download ${RELEASE_TAG_NAME} --dir /tmp/${RELEASE_TAG_NAME} >/dev/null && ls -lh /tmp/${RELEASE_TAG_NAME}/*
+          # upload assets to tencentcos
+          info "    Syncing assets..."
+          if [[ "${DRY_RUN}" == "false" ]]; then
+            coscli sync /tmp/${RELEASE_TAG_NAME}/ cos://${TENCENT_COS_BUCKET}/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG_NAME}/ --err-retry-num 3 --err-retry-interval 3 --recursive
+          fi
+          # cleanup
+          rm -rf /tmp/${RELEASE_TAG_NAME}
+          info "  TencentCOS release ${RELEASE_TAG_NAME} synced."
+        done
