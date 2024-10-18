@@ -54,7 +54,7 @@ jobs:
                 }
                 continue
               }
-              if ('${{ inputs.workflow_call }}' == 'true') {
+              if ('${{ inputs.prune }}' == 'true') {
                 // clean branch caches.
                 deleteCaches.push(c)
               }
