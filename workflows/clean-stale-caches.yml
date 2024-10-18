@@ -10,9 +10,13 @@ defaults:
     shell: bash
 
 on:
-  workflow_dispatch: { }
-  schedule:
-    - cron: "0 0 * * *" # every day at 00:00 UTC
+  workflow_call: 
+    inputs:
+      prune:
+        description: 'Prune all caches'
+        required: false
+        type: bool
+        default: false
 
 jobs:
   clean:
@@ -50,7 +54,7 @@ jobs:
                 }
                 continue
               }
-              if ('${{ github.event_name }}' != 'schedule') {
+              if ('${{ inputs.workflow_call }}' == 'true') {
                 // clean branch caches.
                 deleteCaches.push(c)
               }
