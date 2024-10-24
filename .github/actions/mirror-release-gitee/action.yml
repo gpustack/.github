@@ -13,9 +13,13 @@ inputs:
     required: false
     default: ''
   max-releases: 
-    description: 'Numer of the latest releases to mirror.'
+    description: 'Maximum number of the latest releases to mirror.'
     required: false
     default: '1'
+  specific-release-tag:
+    description: 'Tag name of the specific release to mirror, take precedence over max releases.'
+    required: false
+    default: ''
   github-token:
     description: 'Github token to donwload releases from Github repository, usually inherit from the composition action.'
     required: false
@@ -39,6 +43,7 @@ runs:
         GITEE_TOKEN: "${{ inputs.gitee-token }}"
         GITEE_REPOSITORY: "${{ inputs.gitee-repository && inputs.gitee-repository || (inputs.github-repository && inputs.github-repository || github.repository) }}"
         MAX_RELEASES: "${{ inputs.max-releases }}"
+        SPECIFIC_RELEASE_TAG: "${{ inputs.specific-release-tag }}"
         GITHUB_TOKEN: "${{ inputs.github-token && inputs.github-token || github.token }}"
         GITHUB_REPOSITORY: "${{ inputs.github-repository && inputs.github-repository || github.repository }}"
         DRY_RUN: "${{ inputs.dry-run == 'true' }}"
@@ -68,6 +73,45 @@ runs:
 
         GITEE_REPOSITORY_OWNER="$(echo "${GITEE_REPOSITORY}" | cut -d'/' -f1)"
         GITEE_REPOSITORY_NAME="$(echo "${GITEE_REPOSITORY}" | cut -d'/' -f2)"
+        release() {
+          RELEASE_TAG_NAME="$1"
+          # create gitee release
+          info "  Creating Gitee release ${RELEASE_TAG_NAME}..."
+          gh release view ${RELEASE_TAG_NAME} --json name,tagName,isPrerelease,assets,targetCommitish > /tmp/resp-view-release.json
+          RELEASE_IS_PRERELEASE=$(cat /tmp/resp-view-release.json | jq -r '.isPrerelease')
+          RELEASE_NAME=$(cat /tmp/resp-view-release.json | jq -r '.name')
+          RELEASE_TARGET_COMMITISH=$(cat /tmp/resp-view-release.json | jq -r '.targetCommitish')
+          if [[ "${DRY_RUN}" == "false" ]]; then
+            if [[ "$(curl -X GET https://gitee.com/api/v5/repos/${GITEE_REPOSITORY}/releases/tags/${RELEASE_TAG}\?access_token=${GITEE_TOKEN})" == "null" ]]; then
+              while [[ ! "$(curl -o /tmp/error.log -w %{http_code} -X POST -F "access_token=${GITEE_TOKEN}" -F "name=${RELEASE_NAME}" -F "tag_name=${RELEASE_TAG_NAME}" -F "body=Synced from github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_NAME}." -F "prerelease=${RELEASE_IS_PRERELEASE}" -F "target_commitish=${RELEASE_TARGET_COMMITISH}" https://gitee.com/api/v5/repos/${GITHUB_REPOSITORY}/releases)" =~ ^20.* ]]; do
+                error "  Failed to create Gitee release ${RELEASE_TAG_NAME}: $(cat /tmp/error.log), retrying after 10s..."
+                sleep 10
+              done
+            fi
+            RELEASE_ID="$(curl -X GET https://gitee.com/api/v5/repos/${GITEE_REPOSITORY}/releases/tags/${RELEASE_TAG_NAME}\?access_token=${GITEE_TOKEN} | jq -r '.id')"
+            info "  Gitee release ${RELEASE_TAG_NAME} created, id ${RELEASE_ID}."
+          fi
+          info "  Gitee release ${RELEASE_TAG_NAME} created, id ${RELEASE_ID}."
+          # download assets
+          info "    Downloading assets..."
+          gh release download ${RELEASE_TAG_NAME} --dir /tmp/${RELEASE_TAG_NAME} >/dev/null && ls -lh /tmp/${RELEASE_TAG_NAME}/*
+          # upload assets to gitee
+          info "    Uploading assets that do not exceeds 100MB..."
+          find /tmp/${RELEASE_TAG_NAME} -type f -exec du -h {} + | awk '$1 ~ /[0-9]+G|[0-9]+M/ && $1+0 <= 100 {print $2}' | while read -r asset; do
+            ASSET_NAME=$(basename "${asset}")
+            info "      Uploading asset ${ASSET_NAME}..."
+            if [[ "${DRY_RUN}" == "false" ]]; then
+              while [[ ! "$(curl -o /tmp/error.log -w %{http_code} -X POST -F "access_token=${GITEE_TOKEN}" -F "file=@${asset}" https://gitee.com/api/v5/repos/${GITEE_REPOSITORY}/releases/${RELEASE_ID}/attach_files)" =~ ^20.* ]]; do
+                error "      Failed to upload asset ${ASSET_NAME}: $(cat /tmp/error.log), retrying after 10s..."
+                sleep 10
+              done
+            fi
+            sleep 10
+          done
+          # cleanup
+          rm -rf /tmp/${RELEASE_TAG_NAME}
+          info "Gitee release ${RELEASE_TAG_NAME} assets uploaded."
+        }
         
         info "Syncing Gitee repository..."
         # create gitee remote if not exists
@@ -94,49 +138,19 @@ runs:
         
         info "Releasing to Gitee repository..."
         # create gitee release if not exists
-        gh release list --json name,tagName,isPrerelease,isDraft --order desc --limit ${MAX_RELEASES} | jq -r 'reverse | .[]' | while read -r release; do
-          RELEASE_IS_PRERELEASE=$(echo "${release}" | jq -r '.isPrerelease')
-          RELEASE_NAME=$(echo "${release}" | jq -r '.name')
-          RELEASE_TAG_NAME=$(echo "${release}" | jq -r '.tagName')
-          if [[ "$(echo "${release}" | jq -r '.isDraft')" == "true" ]]; then
-            warn "  Skipped creating invalid release ${RELEASE_TAG_NAME}, continue..."
-            continue
-          fi
-          if [[ "$(curl -X GET https://gitee.com/api/v5/repos/${GITEE_REPOSITORY}/releases/tags/${RELEASE_TAG_NAME}\?access_token=${GITEE_TOKEN})" != "null" ]]; then
-            info "Gitee release ${RELEASE_TAG_NAME} already exists."
-            continue
-          fi
-
-          # create gitee release
-          info "  Creating Gitee release ${RELEASE_TAG_NAME}..."
-          gh release view ${RELEASE_TAG_NAME} --json assets,targetCommitish > /tmp/resp-view-release.json
-          RELEASE_TARGET_COMMITISH=$(cat /tmp/resp-view-release.json | jq -r '.targetCommitish')
-          if [[ "${DRY_RUN}" == "false" ]]; then
-            while [[ ! "$(curl -o /tmp/error.log -w %{http_code} -X POST -F "access_token=${GITEE_TOKEN}" -F "name=${RELEASE_NAME}" -F "tag_name=${RELEASE_TAG_NAME}" -F "body=Synced from github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_NAME}." -F "prerelease=${RELEASE_IS_PRERELEASE}" -F "target_commitish=${RELEASE_TARGET_COMMITISH}" https://gitee.com/api/v5/repos/${GITHUB_REPOSITORY}/releases)" =~ ^20.* ]]; do
-              error "  Failed to create Gitee release ${RELEASE_TAG_NAME}: $(cat /tmp/error.log), retrying after 10s..."
-              sleep 10
-            done
-            RELEASE_ID="$(curl -X GET https://gitee.com/api/v5/repos/${GITEE_REPOSITORY}/releases/tags/${RELEASE_TAG_NAME}\?access_token=${GITEE_TOKEN} | jq -r '.id')"
-            info "  Gitee release ${RELEASE_TAG_NAME} created, id ${RELEASE_ID}."
-          fi
-          info "  Gitee release ${RELEASE_TAG_NAME} created, id ${RELEASE_ID}."
-          # download assets
-          info "    Downloading assets..."
-          gh release download ${RELEASE_TAG_NAME} --dir /tmp/${RELEASE_TAG_NAME} >/dev/null && ls -lh /tmp/${RELEASE_TAG_NAME}/*
-          # upload assets to gitee
-          info "    Uploading assets that do not exceeds 100MB..."
-          find /tmp/${RELEASE_TAG_NAME} -type f -exec du -h {} + | awk '$1 ~ /[0-9]+G|[0-9]+M/ && $1+0 <= 100 {print $2}' | while read -r asset; do
-            ASSET_NAME=$(basename "${asset}")
-            info "      Uploading asset ${ASSET_NAME}..."
-            if [[ "${DRY_RUN}" == "false" ]]; then
-              while [[ ! "$(curl -o /tmp/error.log -w %{http_code} -X POST -F "access_token=${GITEE_TOKEN}" -F "file=@${asset}" https://gitee.com/api/v5/repos/${GITEE_REPOSITORY}/releases/${RELEASE_ID}/attach_files)" =~ ^20.* ]]; do
-                error "      Failed to upload asset ${ASSET_NAME}: $(cat /tmp/error.log), retrying after 10s..."
-                sleep 10
-              done
+        if [[ -n "${SPECIFIC_RELEASE_TAG}" ]]; then
+          release "${SPECIFIC_RELEASE_TAG}"
+        else
+          gh release list --json tagName,isDraft --order desc --limit ${MAX_RELEASES} | jq -r 'reverse | .[]' | while read -r release; do
+            RELEASE_TAG=$(echo "${release}" | jq -r '.tagName')
+            if [[ "$(echo "${release}" | jq -r '.isDraft')" == "true" ]]; then
+              warn "  Skipped creating invalid release ${RELEASE_TAG}, continue..."
+              continue
             fi
-            sleep 10
+            if [[ "$(curl -X GET https://gitee.com/api/v5/repos/${GITEE_REPOSITORY}/releases/tags/${RELEASE_TAG}\?access_token=${GITEE_TOKEN})" != "null" ]]; then
+              info "Gitee release ${RELEASE_TAG} already exists."
+              continue
+            fi
+            release "${RELEASE_TAG}"
           done
-          # cleanup
-          rm -rf /tmp/${RELEASE_TAG_NAME}
-          info "Gitee release ${RELEASE_TAG_NAME} assets uploaded."
-        done
+        fi

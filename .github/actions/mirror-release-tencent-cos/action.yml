@@ -17,9 +17,13 @@ inputs:
     required: false
     default: 'gpustack-1303613262'
   max-releases: 
-    description: 'Numer of the latest releases to mirror.'
+    description: 'Maximum number of the latest releases to mirror.'
     required: false
     default: '1'
+  specific-release-tag:
+    description: 'Tag name of the specific release to mirror, take precedence over max releases.'
+    required: false
+    default: ''
   github-token:
     description: 'Github token to donwload release assets from Github repository, usually inherit from the composition action.'
     required: false
@@ -44,6 +48,7 @@ runs:
         TENCENT_COS_REGION: "${{ inputs.tencent-cos-region }}"
         TENCENT_COS_BUCKET: "${{ inputs.tencent-cos-bucket }}"
         MAX_RELEASES: "${{ inputs.max-releases }}"
+        SPECIFIC_RELEASE_TAG: "${{ inputs.specific-release-tag }}"
         GITHUB_TOKEN: "${{ inputs.github-token && inputs.github-token || github.token }}"
         GITHUB_REPOSITORY: "${{ inputs.github-repository && inputs.github-repository || github.repository }}"
         DRY_RUN: "${{ inputs.dry-run == 'true' }}"
@@ -71,22 +76,8 @@ runs:
           exit 1
         }
 
-        info "Configuring Tencent COS CLI..."
-        curl -o /tmp/coscli -L -X GET https://github.com/tencentyun/coscli/releases/download/v1.0.1/coscli-v1.0.1-linux-amd64 && chmod a+x /tmp/coscli
-        export PATH="/tmp:${PATH}"
-        coscli config set --secret_id "${TENCENT_SECRET_ID}" --secret_key "${TENCENT_SECRET_KEY}" --init-skip
-        coscli config add -b "${TENCENT_COS_BUCKET}" -r "${TENCENT_COS_REGION}" --init-skip
-        
-        info "Releasing to Tencent COS bucket..."
-        # create tencentcos release if not exists
-        gh release list --json name,tagName,isPrerelease,isDraft --order desc --limit ${MAX_RELEASES} | jq -r 'reverse | .[]' | while read -r release; do
-          RELEASE_IS_PRERELEASE=$(echo "${release}" | jq -r '.isPrerelease')
-          RELEASE_TAG_NAME=$(echo "${release}" | jq -r '.tagName')
-          if [[ "$(echo "${release}" | jq -r '.isDraft')" == "true" ]]; then
-            warn "  Skipped creating invalid release ${RELEASE_TAG_NAME}, continue..."
-            continue
-          fi
-          
+        release() {
+          RELEASE_TAG_NAME="$1"
           info "  Syncing Tencent COS release ${RELEASE_TAG_NAME}..."
           # download assets
           info "    Downloading assets..."
@@ -99,4 +90,25 @@ runs:
           # cleanup
           rm -rf /tmp/${RELEASE_TAG_NAME}
           info "  TencentCOS release ${RELEASE_TAG_NAME} synced."
-        done
+        }
+
+        info "Configuring Tencent COS CLI..."
+        curl -o /tmp/coscli -L -X GET https://github.com/tencentyun/coscli/releases/download/v1.0.1/coscli-v1.0.1-linux-amd64 && chmod a+x /tmp/coscli
+        export PATH="/tmp:${PATH}"
+        coscli config set --secret_id "${TENCENT_SECRET_ID}" --secret_key "${TENCENT_SECRET_KEY}" --init-skip
+        coscli config add -b "${TENCENT_COS_BUCKET}" -r "${TENCENT_COS_REGION}" --init-skip
+        
+        info "Releasing to Tencent COS bucket..."
+        # create tencentcos release if not exists
+        if [[ -n "${SPECIFIC_RELEASE_TAG}" ]]; then
+          release "${SPECIFIC_RELEASE_TAG}"
+        else
+          gh release list --json tagName,isDraft --order desc --limit ${MAX_RELEASES} | jq -r 'reverse | .[]' | while read -r release; do
+            RELEASE_TAG=$(echo "${release}" | jq -r '.tagName')
+            if [[ "$(echo "${release}" | jq -r '.isDraft')" == "true" ]]; then
+              warn "  Skipped creating invalid release ${RELEASE_TAG}, continue..."
+              continue
+            fi
+            release "${RELEASE_TAG}"
+          done
+        fi
