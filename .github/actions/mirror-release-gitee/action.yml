@@ -73,6 +73,7 @@ runs:
 
         GITEE_REPOSITORY_OWNER="$(echo "${GITEE_REPOSITORY}" | cut -d'/' -f1)"
         GITEE_REPOSITORY_NAME="$(echo "${GITEE_REPOSITORY}" | cut -d'/' -f2)"
+
         release() {
           RELEASE_TAG_NAME="$1"
           # create gitee release

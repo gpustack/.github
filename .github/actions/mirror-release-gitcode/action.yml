@@ -77,6 +77,7 @@ runs:
 
         GITCODE_REPOSITORY_OWNER="$(echo "${GITCODE_REPOSITORY}" | cut -d'/' -f1)"
         GITCODE_REPOSITORY_NAME="$(echo "${GITCODE_REPOSITORY}" | cut -d'/' -f2)"
+        GITCODE_REPOSITORY_URLENCODED=$(echo "${GITCODE_REPOSITORY}" | sed 's/\//%2F/g')
 
         release() {
           RELEASE_TAG_NAME="$1"
@@ -195,7 +196,6 @@ runs:
               warn "  Skipped creating invalid release ${RELEASE_TAG}, continue..."
               continue
             fi
-            GITCODE_REPOSITORY_URLENCODED=$(echo "${GITCODE_REPOSITORY}" | sed 's/\//%2F/g')
             if [[ "$(curl -b /tmp/login.cookie -o /dev/null -w %{http_code} -X GET https://web-api.gitcode.com/api/v2/projects/${GITCODE_REPOSITORY_URLENCODED}/releases/${RELEASE_TAG})" != "404" ]]; then
               info "GitCode release ${RELEASE_TAG} already exists."
               continue
