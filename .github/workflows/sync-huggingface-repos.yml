@@ -1,0 +1,96 @@
+name: sync-huggingface-repos
+
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+
+defaults:
+  run:
+    shell: bash
+
+on:
+  workflow_dispatch: 
+    inputs:
+      maximize-build-space:
+        description: 'Maximize build space.'
+        required: false
+        type: boolean
+        default: true
+      maximize-build-space-in-deepth:
+        description: 'Maximize build space in deepth.'
+        required: false
+        type: boolean
+        default: false
+      huggingface-repository:
+        description: 'Source HuggingFace repository, inform of "owner/name".'
+        required: true
+        type: string
+      include:
+        description: 'Glob patterns to match files to sync.'
+        required: false
+        type: string
+      exclude:
+        description: 'Glob patterns to exclude from files to sync.'
+        required: false
+        type: string
+      modelscope-repository:
+        description: 'Target HuggingFace repository, inform of "owner/name", usually the same as Source HuggingFace repository.'
+        required: false
+        type: string
+
+
+jobs:
+  sync:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Maximize Build Space
+        if: ${{ inputs.maximize-build-space }}
+        uses: gpustack/.github/.github/actions/maximize-build-space@main
+        with:
+          root-reserve-mb: 1024
+          temp-reserve-mb: 1024
+          swap-size-mb: 1024
+          deep-clean: ${{ inputs.maximize-build-space-in-deepth }}
+      - name: Deps
+        run: |
+          #!/usr/bin/env bash
+
+          pip install -U "huggingface_hub[cli]"
+          pip install -U "modelscope"
+      - name: Login HuggingFace
+        run: |
+          #!/usr/bin/env bash
+
+          huggingface-cli login --token ${{ secrets.CI_HUGGINGFACE_TOKEN }}
+      - name: Login ModelScope
+        run: |
+          #!/usr/bin/env bash
+
+          modelscope login --token ${{ secrets.CI_MODELSCOPE_TOKEN }}
+      - name: Download
+        run: |
+          #!/usr/bin/env bash
+
+          huggingface-cli download ${{ inputs.huggingface-repository }} \
+            --local-dir ${{ inputs.huggingface-repository }} \
+            ${{ inputs.include && format('--include "{0}"', inputs.include) }} \
+            ${{ inputs.exclude && format('--exclude "{0}"', inputs.exclude) }}
+      - name: Upload
+        run: |
+          #!/usr/bin/env bash
+
+          cat <<EOF> /tmp/upload.py
+          from modelscope.hub.api import HubApi
+
+          api = HubApi()
+          api.push_model(
+            model_id="${{ inputs.modelscope-repository && inputs.modelscope-repository || inputs.huggingface-repository }}", 
+            model_dir="${{ github.workspace }}/${{ inputs.huggingface-repository }}"
+          )
+          EOF
+
+          df -h
+          export TMPDIR=${{ github.workspace }}
+          python /tmp/upload.py
+          df -h

@@ -23,6 +23,10 @@ inputs:
     description: 'Tag name of the specific release to mirror, take precedence over max releases.'
     required: false
     default: ''
+  code-only:
+    description: 'Only synchroize codes.'
+    required: false
+    default: false
   github-token:
     description: 'Github token to donwload releases from Github repository, usually inherit from the composition action.'
     required: false
@@ -48,6 +52,7 @@ runs:
         GITCODE_REPOSITORY: "${{ inputs.gitcode-repository && inputs.gitcode-repository || (inputs.github-repository && inputs.github-repository || github.repository) }}"
         MAX_RELEASES: "${{ inputs.max-releases }}"
         SPECIFIC_RELEASE_TAG: "${{ inputs.specific-release-tag }}"
+        CODE_ONLY: "${{ inputs.code-only }}"
         GITHUB_TOKEN: "${{ inputs.github-token && inputs.github-token || github.token }}"
         GITHUB_REPOSITORY: "${{ inputs.github-repository && inputs.github-repository || github.repository }}"
         DRY_RUN: "${{ inputs.dry-run == 'true' }}"
@@ -178,6 +183,10 @@ runs:
           # push to gitcode
           git push gitcode --all --force
           git push gitcode --tags --force
+        fi
+
+        if [[ "${CODE_ONLY}" == "true" ]]; then
+          exit 0
         fi
         
         info "Releasing to GitCode repository..."
