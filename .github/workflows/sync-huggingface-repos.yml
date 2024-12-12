@@ -35,7 +35,7 @@ on:
         required: false
         type: string
       modelscope-repository:
-        description: 'Target HuggingFace repository, inform of "owner/name", usually the same as Source HuggingFace repository.'
+        description: 'Target ModelScope repository, inform of "owner/name", usually the same as Source HuggingFace repository.'
         required: false
         type: string
 
