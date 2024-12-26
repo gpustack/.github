@@ -29,6 +29,7 @@ jobs:
           - '910b'
         cann_version:
           - '8.0.RC2.alpha003'
+          - '8.0.RC3.beta1'
         os_base:
           - 'ubuntu'
           - 'openeuler'
