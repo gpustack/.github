@@ -1,0 +1,53 @@
+ARG DTK_VERSION=24.04.3
+ARG BASE_VERSION=20.04
+
+FROM image.sourcefind.cn:5000/dcu/admin/base/dtk:${DTK_VERSION}-py3.8-ubuntu${BASE_VERSION}
+
+# SOURCE
+RUN apt-get update -y \
+      && apt-get install -y software-properties-common \
+      && add-apt-repository -y ppa:ubuntu-toolchain-r/test \
+      && apt-get update -y
+
+# MAKE & CCACHE & CURL & GIT
+RUN apt-get install -y make ccache curl git \
+      && make --version \
+      && ccache --version \
+      && curl --version \
+      && git --version
+
+# CMAKE
+ENV CMAKE_VERSION=3.22.1
+RUN curl -sL "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-$(uname -m).tar.gz" | tar -zx -C /usr --strip-components 1 \
+      && cmake --version
+
+# GCC
+RUN apt-get install -y binutils pkg-config gcc-11 g++-11 \
+      && update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-11 10 \
+      && update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-11 10 \
+      && ldconfig -v \
+      && gcc --version
+RUN apt-get install -y build-essential
+
+# OPENSSL
+ENV OPENSSL_VESION=3.4.0 \
+    PKG_CONFIG_PATH="/usr/local/openssl/lib/pkgconfig:/usr/local/openssl/lib64/pkgconfig:$PKG_CONFIG_PATH" \
+    LD_LIBRARY_PATH="/usr/local/openssl/lib:/usr/local/openssl/lib64:$LD_LIBRARY_PATH"
+RUN apt-get install -y zlib1g-dev perl \
+      && curl -sL "https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VESION}/openssl-${OPENSSL_VESION}.tar.gz" | tar -zx -C /tmp \
+      && loc=$(pwd) && cd /tmp/openssl-${OPENSSL_VESION} \
+      && ./config --prefix=/usr/local/openssl --openssldir=/etc/ssl shared enable-ssl3 enable-ssl3-method enable-mdc2 enable-md2 \
+      && make -j $(nproc) build_sw && make -j $(nproc) install_sw \
+      && cd ${local} && rm -rf /tmp/openssl-${OPENSSL_VESION} \
+      && ln -vsf /usr/local/openssl/bin/* /usr/bin/ \
+      && ln -vsf /usr/local/openssl/include/openssl /usr/include/openssl \
+      && echo "/usr/local/openssl/lib" >> /etc/ld.so.conf \
+      && echo "/usr/local/openssl/lib64" >> /etc/ld.so.conf \
+      && ldconfig -v \
+      && openssl --version
+
+# OPENBLAS
+RUN apt-get install -y libopenblas-dev
+
+# OPENMP
+RUN apt-get install -y libgomp1 libomp-dev

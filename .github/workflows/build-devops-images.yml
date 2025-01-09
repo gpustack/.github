@@ -15,30 +15,35 @@ on:
       target:
         description: 'Target'
         required: true
-        type: string
+        type: choice
+        options:
+          - all
+          - cann
+          - cpu
+          - cuda
+          - dtk
+          - hip
+          - musa
+          - oneapi
 
 jobs:
   cann:
-    if: ${{ inputs.target == 'cann' }}
+    if: ${{ inputs.target == 'cann' || inputs.target == 'all' }}
     runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
       matrix:
         cann_chip:
-          - '310p'
           - '910b'
+          - '310p'
         cann_version:
-          # - '8.0.RC2.alpha003'
-          - '8.0.RC3.alpha002'
-          # - '8.0.RC3'
+          - '8.0.RC2.alpha003'
         os_base:
           - 'ubuntu'
           - 'openeuler'
         os_version:
           - '20.04'
           - '20.03'
-        py_version:
-          - '3.9'
         exclude:
           - os_base: 'ubuntu'
             os_version: '20.03'
@@ -54,8 +59,70 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          repository: 'cosdt/dockerfiles'
-          ref: '99aaac257b3a98c059b0c055bc1c8d31e6c4fc99'
+          repository: "cosdt/dockerfiles"
+          ref: "99aaac257b3a98c059b0c055bc1c8d31e6c4fc99"
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Setup QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          image: tonistiigi/binfmt:qemu-v8.1.5
+          platforms: "arm64"
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Login DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.CI_DOCKERHUB_USERNAME }}
+          password: ${{ secrets.CI_DOCKERHUB_PASSWORD }}
+      - name: Prepare
+        id: prepare
+        run: |
+          curl -sL https://raw.githubusercontent.com/gpustack/.github/refs/heads/main/cann/${{ matrix.os_base }}/Dockerfile.suffix >> ${{ github.workspace }}/cann/${{ matrix.os_base }}/Dockerfile
+          echo "cann_version_lowercase=$(echo "${{ matrix.cann_version }}" | tr '[:upper:]' '[:lower:]')" >> ${GITHUB_OUTPUT}
+      - name: Package
+        uses: docker/build-push-action@v6
+        with:
+          push: true
+          file: ${{ github.workspace }}/cann/${{ matrix.os_base }}/Dockerfile
+          context: ${{ github.workspace }}/cann
+          platforms: "linux/amd64${{ matrix.os_base != 'centos' && ',linux/arm64' || '' }}"
+          build-args: |
+            CANN_VERSION=${{ matrix.cann_version }}
+            CANN_CHIP=${{ matrix.cann_chip }}
+            BASE_VERSION=${{ matrix.os_version }}
+            PY_VERSION=3.9
+          tags: "gpustack/devel-ascendai-cann:${{ steps.prepare.outputs.cann_version_lowercase }}-${{ matrix.cann_chip }}-${{ matrix.os_base }}${{ matrix.os_version }}"
+          cache-from: |
+            type=registry,ref=gpustack/build-cache:devel-ascendai-cann-${{ steps.prepare.outputs.cann_version_lowercase }}-${{ matrix.cann_chip }}-${{ matrix.os_base }}${{ matrix.os_version }}
+          cache-to: |
+            type=registry,mode=max,oci-mediatypes=false,compression=gzip,ref=gpustack/build-cache:devel-ascendai-cann-${{ steps.prepare.outputs.cann_version_lowercase }}-${{ matrix.cann_chip }}-${{ matrix.os_base }}${{ matrix.os_version }},ignore-error=true
+          provenance: true
+          sbom: true
+
+  cpu:
+    if: ${{ inputs.target == 'cpu' || inputs.target == 'all' }}
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os_base: 'centos'
+            os_version: '7'
+          - os_base: 'rockylinux'
+            os_version: '8.9'
+          - os_base: 'ubuntu'
+            os_version: '18.04'
+    steps:
+      - name: Maximize Docker Build Space
+        uses: gpustack/.github/.github/actions/maximize-docker-build-space@main
+        with:
+          root-reserve-mb: 1024
+          temp-reserve-mb: 1024
+          swap-size-mb: 1024
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
           fetch-depth: 1
           persist-credentials: false
       - name: Setup QEMU
@@ -74,27 +141,294 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           push: true
-          file: ${{ github.workspace }}/cann/${{ matrix.os_base}}/Dockerfile
-          context: ${{ github.workspace }}/cann
-          platforms: 'linux/amd64,linux/arm64'
+          file: ${{ github.workspace }}/cpu/${{ matrix.os_base }}/Dockerfile
+          context: ${{ github.workspace }}/cpu
+          platforms: "linux/amd64${{ matrix.os_base != 'centos' && ',linux/arm64' || '' }}"
           build-args: |
-            CANN_CHIP=${{ matrix.cann_chip }}
-            CANN_VERSION=${{ matrix.cann_version }}
             BASE_VERSION=${{ matrix.os_version }}
-            PY_VERSION=${{ matrix.py_version }}
-          tags: 'gpustack/ascendai-cann:${{ matrix.cann_version }}-${{ matrix.cann_chip }}-${{ matrix.os_base}}${{ matrix.os_version }}-py${{ matrix.py_version }}'
+          tags: "gpustack/devel-cpu:${{ matrix.os_base }}${{ matrix.os_version }}"
           cache-from: |
-            type=registry,ref=gpustack/build-cache:ascendai-cann-${{ matrix.cann_version }}-${{ matrix.cann_chip }}-${{ matrix.os_base}}${{ matrix.os_version }}-py${{ matrix.py_version }}
+            type=registry,ref=gpustack/build-cache:devel-cpu-${{ matrix.os_base }}${{ matrix.os_version }}
           cache-to: |
-            type=registry,mode=max,oci-mediatypes=false,compression=gzip,ref=gpustack/build-cache:ascendai-cann-${{ matrix.cann_version }}-${{ matrix.cann_chip }}-${{ matrix.os_base}}${{ matrix.os_version }}-py${{ matrix.py_version }},ignore-error=true
+            type=registry,mode=max,oci-mediatypes=false,compression=gzip,ref=gpustack/build-cache:devel-cpu-${{ matrix.os_base }}${{ matrix.os_version }},ignore-error=true
           provenance: true
           sbom: true
 
+  cuda:
+    if: ${{ inputs.target == 'cuda' || inputs.target == 'all' }}
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        cuda_version:
+          - '12.4.0'
+          - '11.8.0'
+        os_base:
+          - 'centos'
+        os_version:
+          - '7'
+    steps:
+      - name: Maximize Docker Build Space
+        uses: gpustack/.github/.github/actions/maximize-docker-build-space@main
+        with:
+          root-reserve-mb: 1024
+          temp-reserve-mb: 1024
+          swap-size-mb: 1024
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Setup QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          image: tonistiigi/binfmt:qemu-v8.1.5
+          platforms: "arm64"
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Login DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.CI_DOCKERHUB_USERNAME }}
+          password: ${{ secrets.CI_DOCKERHUB_PASSWORD }}
+      - name: Package
+        uses: docker/build-push-action@v6
+        with:
+          push: true
+          file: ${{ github.workspace }}/cuda/${{ matrix.os_base }}/Dockerfile
+          context: ${{ github.workspace }}/cuda
+          platforms: "linux/amd64${{ matrix.os_base != 'centos' && ',linux/arm64' || '' }}"
+          build-args: |
+            CUDA_VERSION=${{ matrix.cuda_version }}
+            BASE_VERSION=${{ matrix.os_version }}
+          tags: "gpustack/devel-nvidia-cuda:${{ matrix.cuda_version }}-${{ matrix.os_base }}${{ matrix.os_version }}"
+          cache-from: |
+            type=registry,ref=gpustack/build-cache:devel-nvidia-cuda-${{ matrix.cuda_version }}-${{ matrix.os_base }}${{ matrix.os_version }}
+          cache-to: |
+            type=registry,mode=max,oci-mediatypes=false,compression=gzip,ref=gpustack/build-cache:devel-nvidia-cuda-${{ matrix.cuda_version }}-${{ matrix.os_base }}${{ matrix.os_version }},ignore-error=true
+          provenance: true
+          sbom: true
 
+  dtk:
+    if: ${{ inputs.target == 'dtk' || inputs.target == 'all' }}
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        dtk_version:
+          - '24.04.3'
+        os_base:
+          - 'ubuntu'
+        os_version:
+          - '20.04'
+    steps:
+      - name: Maximize Docker Build Space
+        uses: gpustack/.github/.github/actions/maximize-docker-build-space@main
+        with:
+          root-reserve-mb: 1024
+          temp-reserve-mb: 1024
+          swap-size-mb: 1024
+      - name: Setup Docker
+        run: |
+          if [ -f /etc/docker/daemon.json ]; then
+            sudo cat /etc/docker/daemon.json | jq '. + {"allow-nondistributable-artifacts": ["image.sourcefind.cn:5000"]}' | sudo tee /etc/docker/daemon.json
+          else
+            echo '{"debug": true, "experimental": true, "allow-nondistributable-artifacts": ["image.sourcefind.cn:5000"]}' | sudo tee /etc/docker/daemon.json 
+          fi
+          sudo systemctl restart docker
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Setup QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          image: tonistiigi/binfmt:qemu-v8.1.5
+          platforms: "arm64"
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Login DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.CI_DOCKERHUB_USERNAME }}
+          password: ${{ secrets.CI_DOCKERHUB_PASSWORD }}
+      - name: Package
+        uses: docker/build-push-action@v6
+        with:
+          push: true
+          file: ${{ github.workspace }}/dtk/${{ matrix.os_base }}/Dockerfile
+          context: ${{ github.workspace }}/dtk
+          platforms: "linux/amd64${{ matrix.os_base != 'centos' && ',linux/arm64' || '' }}"
+          build-args: |
+            DTK_VERSION=${{ matrix.dtk_version }}
+            BASE_VERSION=${{ matrix.os_version }}
+          tags: "gpustack/devel-hygon-dtk:${{ matrix.dtk_version }}-${{ matrix.os_base }}${{ matrix.os_version }}"
+          cache-from: |
+            type=registry,ref=gpustack/build-cache:devel-hygon-dtk-${{ matrix.dtk_version }}-${{ matrix.os_base }}${{ matrix.os_version }}
+          cache-to: |
+            type=registry,mode=max,oci-mediatypes=false,compression=gzip,ref=gpustack/build-cache:devel-hygon-dtk-${{ matrix.dtk_version }}-${{ matrix.os_base }}${{ matrix.os_version }},ignore-error=true
+          provenance: true
+          sbom: true
 
+  hip:
+    if: ${{ inputs.target == 'hip' || inputs.target == 'all' }}
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        hip_version:
+          - '6.2.4'
+        os_base:
+          - 'centos'
+        os_version:
+          - '7'
+    steps:
+      - name: Maximize Docker Build Space
+        uses: gpustack/.github/.github/actions/maximize-docker-build-space@main
+        with:
+          root-reserve-mb: 1024
+          temp-reserve-mb: 1024
+          swap-size-mb: 1024
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Setup QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          image: tonistiigi/binfmt:qemu-v8.1.5
+          platforms: "arm64"
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Login DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.CI_DOCKERHUB_USERNAME }}
+          password: ${{ secrets.CI_DOCKERHUB_PASSWORD }}
+      - name: Package
+        uses: docker/build-push-action@v6
+        with:
+          push: true
+          file: ${{ github.workspace }}/hip/${{ matrix.os_base }}/Dockerfile
+          context: ${{ github.workspace }}/hip
+          platforms: "linux/amd64${{ matrix.os_base != 'centos' && ',linux/arm64' || '' }}"
+          build-args: |
+            HIP_VERSION=${{ matrix.hip_version }}
+            BASE_VERSION=${{ matrix.os_version }}
+          tags: "gpustack/devel-rocm-hip:${{ matrix.hip_version }}-${{ matrix.os_base }}${{ matrix.os_version }}"
+          cache-from: |
+            type=registry,ref=gpustack/build-cache:devel-rocm-hip-${{ matrix.hip_version }}-${{ matrix.os_base }}${{ matrix.os_version }}
+          cache-to: |
+            type=registry,mode=max,oci-mediatypes=false,compression=gzip,ref=gpustack/build-cache:devel-rocm-hip-${{ matrix.hip_version }}-${{ matrix.os_base }}${{ matrix.os_version }},ignore-error=true
+          provenance: true
+          sbom: true
 
+  musa:
+    if: ${{ inputs.target == 'musa' || inputs.target == 'all' }}
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        musa_version:
+          - 'rc3.1.0'
+        os_base:
+          - 'ubuntu'
+        os_version:
+          - '22.04'
+    steps:
+      - name: Maximize Docker Build Space
+        uses: gpustack/.github/.github/actions/maximize-docker-build-space@main
+        with:
+          root-reserve-mb: 1024
+          temp-reserve-mb: 1024
+          swap-size-mb: 1024
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Setup QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          image: tonistiigi/binfmt:qemu-v8.1.5
+          platforms: "arm64"
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Login DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.CI_DOCKERHUB_USERNAME }}
+          password: ${{ secrets.CI_DOCKERHUB_PASSWORD }}
+      - name: Package
+        uses: docker/build-push-action@v6
+        with:
+          push: true
+          file: ${{ github.workspace }}/musa/${{ matrix.os_base }}/Dockerfile
+          context: ${{ github.workspace }}/musa
+          platforms: "linux/amd64${{ matrix.os_base != 'centos' && ',linux/arm64' || '' }}"
+          build-args: |
+            MUSA_VERSION=${{ matrix.musa_version }}
+            BASE_VERSION=${{ matrix.os_version }}
+          tags: "gpustack/devel-mthreads-musa:${{ matrix.musa_version }}-${{ matrix.os_base }}${{ matrix.os_version }}"
+          cache-from: |
+            type=registry,ref=gpustack/build-cache:devel-mthreads-musa-${{ matrix.musa_version }}-${{ matrix.os_base }}${{ matrix.os_version }}
+          cache-to: |
+            type=registry,mode=max,oci-mediatypes=false,compression=gzip,ref=gpustack/build-cache:devel-mthreads-musa-${{ matrix.musa_version }}-${{ matrix.os_base }}${{ matrix.os_version }},ignore-error=true
+          provenance: true
+          sbom: true
 
-
-
-
-
+  oneapi:
+    if: ${{ inputs.target == 'oneapi' || inputs.target == 'all' }}
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        oneapi_version:
+          - '2025.0.0-0'
+        os_base:
+          - 'ubuntu'
+        os_version:
+          - '22.04'
+    steps:
+      - name: Maximize Docker Build Space
+        uses: gpustack/.github/.github/actions/maximize-docker-build-space@main
+        with:
+          root-reserve-mb: 1024
+          temp-reserve-mb: 1024
+          swap-size-mb: 1024
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Setup QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          image: tonistiigi/binfmt:qemu-v8.1.5
+          platforms: "arm64"
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Login DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.CI_DOCKERHUB_USERNAME }}
+          password: ${{ secrets.CI_DOCKERHUB_PASSWORD }}
+      - name: Package
+        uses: docker/build-push-action@v6
+        with:
+          push: true
+          file: ${{ github.workspace }}/oneapi/${{ matrix.os_base }}/Dockerfile
+          context: ${{ github.workspace }}/oneapi
+          platforms: "linux/amd64${{ matrix.os_base != 'centos' && ',linux/arm64' || '' }}"
+          build-args: |
+            ONEAPI_VERSION=${{ matrix.oneapi_version }}
+            BASE_VERSION=${{ matrix.os_version }}
+          tags: "gpustack/devel-intel-oneapi:${{ matrix.oneapi_version }}-${{ matrix.os_base }}${{ matrix.os_version }}"
+          cache-from: |
+            type=registry,ref=gpustack/build-cache:devel-intel-oneapi-${{ matrix.oneapi_version }}-${{ matrix.os_base }}${{ matrix.os_version }}
+          cache-to: |
+            type=registry,mode=max,oci-mediatypes=false,compression=gzip,ref=gpustack/build-cache:devel-intel-oneapi-${{ matrix.oneapi_version }}-${{ matrix.os_base }}${{ matrix.os_version }},ignore-error=true
+          provenance: true
+          sbom: true
