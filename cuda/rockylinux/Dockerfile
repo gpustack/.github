@@ -1,31 +1,38 @@
-ARG MUSA_VERSION=rc3.1.0
-ARG BASE_VERSION=22.04
+ARG CUDA_VERSION=12.4.0
+ARG BASE_VERSION=8
 
-FROM mthreads/musa:${MUSA_VERSION}-devel-ubuntu${BASE_VERSION}
+FROM nvidia/cuda:${CUDA_VERSION}-devel-rockylinux${BASE_VERSION}
 
 # SOURCE
-RUN apt-get update -y \
-      && apt-get install -y software-properties-common \
-      && add-apt-repository -y ppa:ubuntu-toolchain-r/test \
-      && apt-get update -y
+RUN dnf install -y epel-release \
+      && dnf config-manager --set-enabled powertools
 
 # MAKE & CCACHE & CURL & GIT
-RUN apt-get install -y make ccache curl git \
+RUN yum install -y make ccache curl git \
       && make --version \
       && ccache --version \
       && curl --version \
       && git --version
 
 # CMAKE
-RUN apt-get install -y cmake
+ENV CMAKE_VERSION=3.22.1
+RUN curl -sL "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-$(uname -m).tar.gz" | tar -zx -C /usr --strip-components 1 \
+      && cmake --version
 
 # GCC
-RUN apt-get install -y build-essential
+ENV PKG_CONFIG_PATH="/opt/rh/gcc-toolset-11/root/usr/lib/pkgconfig:/opt/rh/gcc-toolset-11/root/usr/lib64/pkgconfig:$PKG_CONFIG_PATH" \
+    LD_LIBRARY_PATH="/opt/rh/gcc-toolset-11/root/usr/lib:/opt/rh/gcc-toolset-11/root/usr/lib/dyninst:/opt/rh/gcc-toolset-11/root/usr/lib64:/opt/rh/gcc-toolset-11/root/usr/lib64/dyninst:$LD_LIBRARY_PATH"
+RUN dnf install -y binutils pkgconfig gcc gcc-c++ gcc-toolset-11 \
+      && ln -vsf /opt/rh/gcc-toolset-11/root/bin/* /usr/bin/ \
+      && echo "/opt/rh/gcc-toolset-11/root/usr/lib" >> /etc/ld.so.conf \
+      && echo "/opt/rh/gcc-toolset-11/root/usr/lib64" >> /etc/ld.so.conf \
+      && ldconfig -v \
+      && gcc --version
+RUN dnf install -y glibc-static libstdc++-static
 
 # OPENSSL
 ENV OPENSSL_VESION=3.4.0
-RUN apt-get remove -y libssl-dev perl-openssl-defaults \
-      && apt-get install -y perl \
+RUN dnf install -y perl \
       && curl -sL "https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VESION}/openssl-${OPENSSL_VESION}.tar.gz" | tar -zx -C /tmp \
       && loc=$(pwd) && cd /tmp/openssl-${OPENSSL_VESION} \
       && ./config --prefix=/usr --openssldir=/etc/ssl shared enable-ssl3 enable-ssl3-method enable-mdc2 enable-md2 no-tests \
@@ -37,7 +44,7 @@ RUN apt-get remove -y libssl-dev perl-openssl-defaults \
 
 # FFMPEG
 ENV FFMPEG_VESION=n7.1
-RUN apt-get install -y perl yasm \
+RUN dnf install -y perl yasm \
       && git config --global advice.detachedHead false \
       && git clone --depth 1 --branch ${FFMPEG_VESION} https://github.com/FFmpeg/FFmpeg.git /tmp/FFmpeg-${FFMPEG_VESION} \
       && loc=$(pwd) && cd /tmp/FFmpeg-${FFMPEG_VESION} \

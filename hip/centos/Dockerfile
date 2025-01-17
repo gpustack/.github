@@ -33,6 +33,7 @@ ENV PKG_CONFIG_PATH="/opt/rh/devtoolset-9/root/usr/lib/pkgconfig:/opt/rh/devtool
     LD_LIBRARY_PATH="/opt/rh/devtoolset-9/root/usr/lib:/opt/rh/devtoolset-9/root/usr/lib/dyninst:/opt/rh/devtoolset-9/root/usr/lib64:/opt/rh/devtoolset-9/root/usr/lib64/dyninst:$LD_LIBRARY_PATH"
 RUN yum install -y devtoolset-9 devtoolset-9-libatomic-devel devtoolset-9-elfutils-libelf-devel \
       && ln -vsf /opt/rh/devtoolset-9/root/bin/* /usr/bin/ \
+      && ln -vsf /opt/rh/devtoolset-9/root/bin/* /opt/rh/devtoolset-7/root/usr/bin/ \
       && echo "/opt/rh/devtoolset-9/root/usr/lib" >> /etc/ld.so.conf \
       && echo "/opt/rh/devtoolset-9/root/usr/lib64" >> /etc/ld.so.conf \
       && ldconfig -v \
@@ -40,31 +41,37 @@ RUN yum install -y devtoolset-9 devtoolset-9-libatomic-devel devtoolset-9-elfuti
 RUN yum install -y glibc-static libstdc++-static
 
 # OPENSSL
-ENV OPENSSL_VESION=3.4.0 \
-    PKG_CONFIG_PATH="/usr/local/openssl/lib/pkgconfig:/usr/local/openssl/lib64/pkgconfig:$PKG_CONFIG_PATH" \
-    LD_LIBRARY_PATH="/usr/local/openssl/lib:/usr/local/openssl/lib64:$LD_LIBRARY_PATH"
-RUN yum install -y zlib-devel perl perl-IPC-Cmd perl-Test-Simple perl-CPAN \
+ENV OPENSSL_VESION=3.4.0
+RUN yum install -y perl perl-IPC-Cmd perl-Test-Simple perl-CPAN \
       && curl -sL "https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VESION}/openssl-${OPENSSL_VESION}.tar.gz" | tar -zx -C /tmp \
       && loc=$(pwd) && cd /tmp/openssl-${OPENSSL_VESION} \
-      && ./config --prefix=/usr/local/openssl --openssldir=/etc/ssl shared enable-ssl3 enable-ssl3-method enable-mdc2 enable-md2 \
+      && ./config --prefix=/usr --openssldir=/etc/ssl shared enable-ssl3 enable-ssl3-method enable-mdc2 enable-md2 no-tests \
       && make -j $(nproc) build_sw && make -j $(nproc) install_sw \
-      && cd ${local} && rm -rf /tmp/openssl-${OPENSSL_VESION} \
-      && ln -vsf /usr/local/openssl/bin/* /usr/bin/ \
-      && ln -vsf /usr/local/openssl/include/openssl /usr/include/openssl \
-      && echo "/usr/local/openssl/lib" >> /etc/ld.so.conf \
-      && echo "/usr/local/openssl/lib64" >> /etc/ld.so.conf \
-      && ldconfig -v \
-      && openssl --version
+      && cd ${loc} && rm -rf /tmp/openssl-${OPENSSL_VESION} \
+      && echo "/usr/lib" >> /etc/ld.so.conf \
+      && echo "/usr/lib64" >> /etc/ld.so.conf \
+      && ldconfig -v | grep libssl
+
+# FFMPEG
+ENV FFMPEG_VESION=n7.1
+RUN yum install -y perl yasm \
+      && git config --global advice.detachedHead false \
+      && git clone --depth 1 --branch ${FFMPEG_VESION} https://github.com/FFmpeg/FFmpeg.git /tmp/FFmpeg-${FFMPEG_VESION} \
+      && loc=$(pwd) && cd /tmp/FFmpeg-${FFMPEG_VESION} \
+      && ./configure --prefix=/usr --enable-gpl --enable-shared --disable-programs --disable-doc --disable-debug --disable-stripping \
+      && make -j $(nproc) all && make -j $(nproc) install \
+      && cd ${loc} && rm -rf /tmp/FFmpeg-${FFMPEG_VESION} \
+      && echo "/usr/lib" >> /etc/ld.so.conf \
+      && echo "/usr/lib64" >> /etc/ld.so.conf \
+      && ldconfig -v | grep libav
 
 # OPENBLAS
-RUN yum install -y openblas-static
-COPY <<EOF /usr/lib64/pkgconfig/openblas.pc
-Name: OpenBLAS
-Description: OpenBLAS library
-Version: 0.3.3
-Libs: -L/usr/lib64 -lopenblas
-Cflags: -I/usr/include/openblas
-EOF
-
-# OPENMP
-RUN yum install -y libgomp openmpi openmpi-devel
+ENV OPENBLAS_VERSION=0.3.29
+RUN ARCH=$(uname -m) \
+      && curl -sL "https://github.com/OpenMathLib/OpenBLAS/releases/download/v${OPENBLAS_VERSION}/OpenBLAS-${OPENBLAS_VERSION}.tar.gz" | tar -zx -C /tmp \
+      && loc=$(pwd) && cd /tmp/OpenBLAS-${OPENBLAS_VERSION} \
+      && make -j $(nproc) PREFIX=/usr USE_OPENMP=0 NUM_THREADS=32 TARGET=$([ "${ARCH}" = "x86_64" ] && printf "GENERIC" || printf "ARMV8") libs shared install \
+      && cd ${loc} && rm -rf /tmp/OpenBLAS-${OPENBLAS_VERSION} \
+      && echo "/usr/lib" >> /etc/ld.so.conf \
+      && echo "/usr/lib64" >> /etc/ld.so.conf \
+      && ldconfig -v | grep libopenblas
