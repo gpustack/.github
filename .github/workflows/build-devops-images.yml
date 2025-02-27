@@ -335,7 +335,6 @@ jobs:
       fail-fast: false
       matrix:
         musa_version:
-          - 'rc3.1.0'
           - 'rc3.1.1'
         os_base:
           - 'ubuntu'
