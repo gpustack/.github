@@ -45,6 +45,14 @@ download_file() {
     return 1
 }
 
+detect_cann() {
+    local url_prefix="https://ascend-repo.obs.cn-east-2.myhuaweicloud.com/CANN/CANN%20${CANN_DOWNLOAD_VERSION}"
+    local url_suffix="response-content-type=application/octet-stream"
+    local url="${url_prefix}/${1}?${url_suffix}"
+
+    curl -fsSIL "${url}" >/dev/null 2>&1
+}
+
 download_cann() {
     local url_prefix="https://ascend-repo.obs.cn-east-2.myhuaweicloud.com/CANN/CANN%20${CANN_DOWNLOAD_VERSION}"
     local url_suffix="response-content-type=application/octet-stream"
@@ -114,9 +122,9 @@ install_cann() {
 
     # Install CANN Nnal
     echo "Installing ${NNAL_FILE}"
-    chmod +x "${NNAL_FILE}"
-    bash "${NNAL_FILE}" --quiet --install --install-for-all --install-path="${CANN_HOME}"
-    rm -f "${NNAL_FILE}"
+    chmod +x "${NNAL_PATH}"
+    bash "${NNAL_PATH}" --quiet --install --install-path="${CANN_HOME}"
+    rm -f "${NNAL_PATH}"
 
     echo "CANN ${CANN_VERSION} installation successful."
 }
@@ -129,11 +137,18 @@ CANN_VERSION="${CANN_VERSION:="8.0.RC2.beta1"}"
 CANN_DOWNLOAD_VERSION="${CANN_VERSION%\.beta1}"
 
 TOOLKIT_FILE="Ascend-cann-toolkit_${CANN_DOWNLOAD_VERSION}_linux-${ARCH}.run"
-KERNELS_FILE="Ascend-cann-kernels-${CANN_CHIP}_${CANN_DOWNLOAD_VERSION}_linux.run"
+KERNELS_FILE="Ascend-cann-kernels-${CANN_CHIP}_${CANN_DOWNLOAD_VERSION}_linux-${ARCH}.run"
+if ! detect_cann "${KERNELS_FILE}"; then
+    KERNELS_FILE="Ascend-cann-kernels-${CANN_CHIP}_${CANN_DOWNLOAD_VERSION}_linux.run"
+fi
 NNAL_FILE="Ascend-cann-nnal_${CANN_DOWNLOAD_VERSION}_linux-${ARCH}.run"
 TOOLKIT_PATH="/tmp/${TOOLKIT_FILE}"
 KERNELS_PATH="/tmp/${KERNELS_FILE}"
 NNAL_PATH="/tmp/${NNAL_FILE}"
+
+echo "TOOLKIT_FILE=${TOOLKIT_FILE}"
+echo "KERNELS_FILE=${KERNELS_FILE}"
+echo "NNAL_FILE=${NNAL_FILE}"
 
 # Parse arguments
 if [ "$1" == "--download" ]; then
