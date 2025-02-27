@@ -37,7 +37,9 @@ jobs:
           - '910b'
           - '310p'
         cann_version:
-          - '8.0.RC2.alpha003'
+          - '8.0.RC2.beta1'
+          - '8.0.RC3.beta1'
+          - '8.0.0.beta1'
         os_base:
           - 'ubuntu'
           - 'openeuler'
@@ -79,6 +81,7 @@ jobs:
         id: prepare
         run: |
           curl -sL https://raw.githubusercontent.com/gpustack/.github/refs/heads/main/cann/${{ matrix.os_base }}/Dockerfile.suffix >> ${{ github.workspace }}/cann/${{ matrix.os_base }}/Dockerfile
+          curl -sL https://raw.githubusercontent.com/gpustack/.github/refs/heads/main/cann/scripts/cann.sh > ${{ github.workspace }}/cann/scripts/cann.sh
           echo "cann_version_lowercase=$(echo "${{ matrix.cann_version }}" | tr '[:upper:]' '[:lower:]')" >> ${GITHUB_OUTPUT}
       - name: Package
         uses: docker/build-push-action@v6
@@ -91,7 +94,7 @@ jobs:
             CANN_VERSION=${{ matrix.cann_version }}
             CANN_CHIP=${{ matrix.cann_chip }}
             BASE_VERSION=${{ matrix.os_version }}
-            PY_VERSION=3.9
+            PY_VERSION=3.10
           tags: "gpustack/devel-ascendai-cann:${{ steps.prepare.outputs.cann_version_lowercase }}-${{ matrix.cann_chip }}-${{ matrix.os_base }}${{ matrix.os_version }}"
           cache-from: |
             type=registry,ref=gpustack/build-cache:devel-ascendai-cann-${{ steps.prepare.outputs.cann_version_lowercase }}-${{ matrix.cann_chip }}-${{ matrix.os_base }}${{ matrix.os_version }}
