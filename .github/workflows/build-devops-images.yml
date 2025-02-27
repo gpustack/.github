@@ -42,15 +42,8 @@ jobs:
           - '8.0.0.beta1'
         os_base:
           - 'ubuntu'
-          - 'openeuler'
         os_version:
           - '20.04'
-          - '20.03'
-        exclude:
-          - os_base: 'ubuntu'
-            os_version: '20.03'
-          - os_base: 'openeuler'
-            os_version: '20.04'
     steps:
       - name: Maximize Docker Build Space
         uses: gpustack/.github/.github/actions/maximize-docker-build-space@main
