@@ -54,8 +54,12 @@ jobs:
                 }
                 continue
               }
+              // do not clean toolbox caches.
+              if (c.key.match(/^toolbox-.*$/)) {
+                continue
+              }
+              // clean branch caches.
               if ('${{ inputs.prune }}' == 'true') {
-                // clean branch caches.
                 deleteCaches.push(c)
               }
             }
