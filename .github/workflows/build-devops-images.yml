@@ -157,6 +157,7 @@ jobs:
       fail-fast: false
       matrix:
         cuda_version:
+          - '12.8.0'
           - '12.4.0'
           - '11.8.0'
         os_base:
@@ -170,6 +171,8 @@ jobs:
             os_version: '7'
           - os_base: 'centos'
             os_version: '8'
+          - cuda_version: '12.8.0'
+            os_base: 'centos'
     steps:
       - name: Maximize Docker Build Space
         uses: gpustack/.github/.github/actions/maximize-docker-build-space@main
