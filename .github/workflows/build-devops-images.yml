@@ -25,6 +25,7 @@ on:
           - hip
           - musa
           - oneapi
+          - vulkan
 
 jobs:
   cann:
@@ -33,13 +34,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        cann_version:
+          - '8.0.0.beta1'
+          - '8.0.RC3.beta1'
+          - '8.0.RC2.beta1'
         cann_chip:
           - '910b'
           - '310p'
-        cann_version:
-          - '8.0.RC2.beta1'
-          - '8.0.RC3.beta1'
-          - '8.0.0.beta1'
         os_base:
           - 'ubuntu'
         os_version:
@@ -161,11 +162,11 @@ jobs:
           - '12.4.0'
           - '11.8.0'
         os_base:
-          - 'centos'
           - 'rockylinux'
+          - 'centos'
         os_version:
-          - '7'
           - '8'
+          - '7'
         exclude:
           - os_base: 'rockylinux'
             os_version: '7'
@@ -436,5 +437,67 @@ jobs:
             type=registry,ref=gpustack/build-cache:devel-intel-oneapi-${{ matrix.oneapi_version }}-${{ matrix.os_base }}${{ matrix.os_version }}
           cache-to: |
             type=registry,mode=max,oci-mediatypes=false,compression=gzip,ref=gpustack/build-cache:devel-intel-oneapi-${{ matrix.oneapi_version }}-${{ matrix.os_base }}${{ matrix.os_version }},ignore-error=true
+          provenance: true
+          sbom: true
+
+  vulkan:
+    if: ${{ inputs.target == 'vulkan' || inputs.target == 'all' }}
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        vulkan_version:
+          - '1.3.296'
+          - '1.3.261'
+        os_base:
+          - 'ubuntu'
+        os_version:
+          - '22.04'
+          - '20.04'
+        exclude:
+          - vulkan_version: '1.3.296'
+            os_version: '20.04'
+          - vulkan_version: '1.3.261'
+            os_version: '22.04'
+    steps:
+      - name: Maximize Docker Build Space
+        uses: gpustack/.github/.github/actions/maximize-docker-build-space@main
+        with:
+          root-reserve-mb: 1024
+          temp-reserve-mb: 1024
+          swap-size-mb: 1024
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Setup QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          image: tonistiigi/binfmt:qemu-v8.1.5
+          platforms: "arm64"
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Login DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.CI_DOCKERHUB_USERNAME }}
+          password: ${{ secrets.CI_DOCKERHUB_PASSWORD }}
+      - name: Package
+        uses: docker/build-push-action@v6
+        with:
+          push: true
+          file: ${{ github.workspace }}/vulkan/${{ matrix.os_base }}/Dockerfile
+          context: ${{ github.workspace }}/vulkan
+          # NB(thxCode): donot support arm64 at present.
+          platforms: "linux/amd64"
+          build-args: |
+            VULKAN_VERSION=${{ matrix.vulkan_version }}
+            BASE_VERSION=${{ matrix.os_version }}
+          tags: "gpustack/devel-lunarg-vulkan:${{ matrix.vulkan_version }}-${{ matrix.os_base }}${{ matrix.os_version }}"
+          cache-from: |
+            type=registry,ref=gpustack/build-cache:devel-lunarg-vulkan-${{ matrix.vulkan_version }}-${{ matrix.os_base }}${{ matrix.os_version }}
+          cache-to: |
+            type=registry,mode=max,oci-mediatypes=false,compression=gzip,ref=gpustack/build-cache:devel-lunarg-vulkan-${{ matrix.vulkan_version }}-${{ matrix.os_base }}${{ matrix.os_version }},ignore-error=true
           provenance: true
           sbom: true
