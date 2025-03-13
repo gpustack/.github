@@ -447,18 +447,12 @@ jobs:
       fail-fast: false
       matrix:
         vulkan_version:
+          - '1.4.304'
           - '1.3.296'
-          - '1.3.261'
         os_base:
           - 'ubuntu'
         os_version:
           - '22.04'
-          - '20.04'
-        exclude:
-          - vulkan_version: '1.3.296'
-            os_version: '20.04'
-          - vulkan_version: '1.3.261'
-            os_version: '22.04'
     steps:
       - name: Maximize Docker Build Space
         uses: gpustack/.github/.github/actions/maximize-docker-build-space@main
