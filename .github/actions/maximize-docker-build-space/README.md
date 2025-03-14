@@ -1,6 +1,6 @@
 # Maximize Docker Build Space
 
-This action maximizes the space available to Docker building. It inspired by [easimon/maximize-build-space](https://github.com/easimon/maximize-build-space).
+This action maximizes the build space (`${DOCKER_WORKSPACE:-/var/lib/docker}`) available to Docker building. It inspired by [easimon/maximize-build-space](https://github.com/easimon/maximize-build-space).
 
 ## Usage
 

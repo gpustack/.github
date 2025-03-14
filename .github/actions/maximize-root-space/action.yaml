@@ -1,0 +1,88 @@
+name: 'Maximize Root Space'
+description: 'Maximize the root available to building'
+
+inputs:
+  deep-clean:
+    description: 'Perform a deep clean, removing unnecessary packages.'
+    required: false
+    default: 'false'
+
+runs:
+  using: "composite"
+  steps:
+    - name: Pre
+      shell: bash
+      run: |
+        #!/usr/bin/env bash
+        
+        echo "Memory and swap:"
+        sudo free
+        echo
+        sudo swapon --show
+        echo
+
+        echo "Available storage:"
+        sudo df -h
+        echo
+    - name: Action
+      shell: bash
+      run: |
+        #!/usr/bin/env bash
+
+        if [[ ${{ inputs.deep-clean }} == 'true' ]]; then
+          echo "Purging unnecessary packages"
+          sudo apt-get remove -y '^aspnetcore-.*' || true
+          sudo apt-get remove -y '^dotnet-.*' --fix-missing || true
+          sudo apt-get remove -y '^llvm-.*' --fix-missing || true
+          sudo apt-get remove -y 'php.*' --fix-missing || true
+          sudo apt-get remove -y '^mongodb-.*' --fix-missing || true
+          sudo apt-get remove -y '^mysql-.*' --fix-missing || true
+          sudo apt-get remove -y '^postgresql-.*' --fix-missing || true
+          sudo apt-get remove -y --fix-missing \
+            azure-cli \
+            firefox \
+            powershell \
+            mono-devel \
+            libgl1-mesa-dri \
+            microsoft-edge-stable \
+            google-chrome-stable \
+            google-cloud-sdk \
+            google-cloud-cli \
+            apache2 || true
+          sudo apt-get autoremove -y || true
+          sudo apt-get clean || true
+        fi
+        
+        echo "Purging unnecessary directories"
+        sudo rm -rf /usr/local/.ghcup || true
+        sudo rm -rf /usr/local/julia* || true
+        sudo rm -rf /usr/local/graalvm || true
+        sudo rm -rf /usr/local/lib/android || true
+        sudo rm -rf /usr/local/lib/node_modules || true
+        sudo rm -rf /usr/local/share/chromium || true
+        sudo rm -rf /usr/local/share/powershell || true
+        sudo rm -rf /usr/share/dotnet || true
+        sudo rm -rf /usr/share/swift || true
+        sudo rm -rf /opt/ghc || true
+        sudo rm -rf /opt/google/chrome || true
+        sudo rm -rf /opt/microsoft/msedge || true
+        sudo rm -rf /opt/microsoft/powershell || true
+        sudo rm -rf "${AGENT_TOOLSDIRECTORY:-/opt/hostedtoolcache/CodeQL}" || true
+        
+        echo "Purging unnecessary images"
+        sudo docker image prune --all --force
+
+    - name: Post
+      shell: bash
+      run: |
+        #!/usr/bin/env bash
+        
+        echo "Memory and swap:"
+        sudo free
+        echo
+        sudo swapon --show
+        echo
+
+        echo "Available storage:"
+        sudo df -h
+        echo

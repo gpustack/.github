@@ -1,6 +1,6 @@
 # Maximize Build Space
 
-This action maximizes the space available to building. It inspired by [easimon/maximize-build-space](https://github.com/easimon/maximize-build-space).
+This action maximizes the build space (`${GITHUB_WORKSPACE}`) available to building. It inspired by [easimon/maximize-build-space](https://github.com/easimon/maximize-build-space).
 
 ## Usage
 
