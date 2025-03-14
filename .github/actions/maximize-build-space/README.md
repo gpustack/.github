@@ -20,7 +20,7 @@ inputs:
   root-reserve-mb:
     description: 'Space to be left free on the root filesystem, in Megabytes.'
     required: false
-    default: '2048'
+    default: '4096'
   temp-reserve-mb:
     description: 'Space to be left free on the temp filesystem (/mnt), in Megabytes.'
     required: false
@@ -28,7 +28,7 @@ inputs:
   swap-size-mb:
     description: 'Swap space to create, in Megabytes.'
     required: false
-    default: '2048'
+    default: '4096'
   deep-clean:
     description: 'Perform a deep clean, removing unnecessary packages.'
     required: false

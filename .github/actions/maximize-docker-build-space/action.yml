@@ -5,7 +5,7 @@ inputs:
   root-reserve-mb:
     description: 'Space to be left free on the root filesystem, in Megabytes.'
     required: false
-    default: '2048'
+    default: '4096'
   temp-reserve-mb:
     description: 'Space to be left free on the temp filesystem (/mnt), in Megabytes.'
     required: false
@@ -13,7 +13,7 @@ inputs:
   swap-size-mb:
     description: 'Swap space to create, in Megabytes.'
     required: false
-    default: '2048'
+    default: '4096'
   deep-clean:
     description: 'Perform a deep clean, removing unnecessary packages.'
     required: false
@@ -110,6 +110,7 @@ runs:
         sudo touch "${ROOT_PV_LOOP_PATH}" && sudo fallocate -z -l "${ROOT_LVM_SIZE_BYTES}" "${ROOT_PV_LOOP_PATH}"
         export ROOT_LOOP_DEV=$(sudo losetup --find --show "${ROOT_PV_LOOP_PATH}")
         sudo pvcreate -f "${ROOT_LOOP_DEV}"
+        echo "  Reserve ${{ inputs.root-reserve-mb }} Mib, Contrib $(expr $ROOT_LVM_SIZE_KB / 1024) Mib"
 
         # create pv on temp disk
         echo "Creating LVM PV on temp fs"
@@ -121,6 +122,7 @@ runs:
         sudo touch "${TMP_PV_LOOP_PATH}" && sudo fallocate -z -l "${TMP_LVM_SIZE_BYTES}" "${TMP_PV_LOOP_PATH}"
         export TMP_LOOP_DEV=$(sudo losetup --find --show "${TMP_PV_LOOP_PATH}")
         sudo pvcreate -f "${TMP_LOOP_DEV}"
+        echo "  Reserve ${{ inputs.temp-reserve-mb }} Mib, Contrib $(expr $TMP_LVM_SIZE_KB / 1024) Mib"
         
         VG_NAME=buildvg
         # create volume group from these pvs
@@ -131,6 +133,7 @@ runs:
         sudo lvcreate -L "${{ inputs.swap-size-mb }}M" -n swap "${VG_NAME}"
         sudo mkswap "/dev/mapper/${VG_NAME}-swap"
         sudo swapon "/dev/mapper/${VG_NAME}-swap"
+        echo "  Reserve ${{ inputs.swap-size-mb }} Mib"
 
         echo "Recreating docker workspace"
         # create and mount build volume
