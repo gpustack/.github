@@ -157,23 +157,25 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        cuda_version:
-          - '12.8.0'
-          - '12.4.0'
-          - '11.8.0'
-        os_base:
-          - 'rockylinux'
-          - 'centos'
-        os_version:
-          - '8'
-          - '7'
-        exclude:
+        include:
           - os_base: 'rockylinux'
-            os_version: '7'
-          - os_base: 'centos'
             os_version: '8'
-          - cuda_version: '12.8.0'
-            os_base: 'centos'
+            cuda_version: '12.8.0'
+          - os_base: 'rockylinux'
+            os_version: '8'
+            cuda_version: '12.4.1'
+          - os_base: 'rockylinux'
+            os_version: '8'
+            cuda_version: '12.4.0'
+          - os_base: 'rockylinux'
+            os_version: '8'
+            cuda_version: '11.8.0'
+          - os_base: 'centos'
+            os_version: '7'
+            cuda_version: '12.4.0'
+          - os_base: 'centos'
+            os_version: '7'
+            cuda_version: '11.8.0'
     steps:
       - name: Maximize Docker Build Space
         uses: gpustack/.github/.github/actions/maximize-docker-build-space@main
