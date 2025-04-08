@@ -32,7 +32,7 @@ download_file() {
 
     for ((i=1; i<=max_retries; i++)); do
         echo "Attempt $i of $max_retries..."
-        curl -fSL -o "${path}" "${url}"
+        curl -H 'Referer: https://www.hiascend.com/' -fSL -o "${path}" "${url}"
         if [[ $? -eq 0 ]]; then
             return 0
         else
@@ -50,7 +50,7 @@ detect_cann() {
     local url_suffix="response-content-type=application/octet-stream"
     local url="${url_prefix}/${1}?${url_suffix}"
 
-    curl -fsSIL "${url}" >/dev/null 2>&1
+    curl -H 'Referer: https://www.hiascend.com/' -fsSIL "${url}" >/dev/null 2>&1
 }
 
 download_cann() {
