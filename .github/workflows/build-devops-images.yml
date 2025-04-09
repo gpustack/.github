@@ -27,6 +27,9 @@ on:
           - oneapi
           - vulkan
 
+env:
+  suffix: "-v2"
+
 jobs:
   cann:
     if: ${{ inputs.target == 'cann' || inputs.target == 'all' }}
@@ -34,17 +37,31 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        cann_version:
-          - '8.0.0.beta1'
-          - '8.0.RC3.beta1'
-          - '8.0.RC2.beta1'
-        cann_chip:
-          - '910b'
-          - '310p'
-        os_base:
-          - 'ubuntu'
-        os_version:
-          - '20.04'
+        include:
+          - cann_version: '8.0.0.beta1'
+            cann_chip: '910b'
+            os_base: 'ubuntu'
+            os_version: '20.04'
+          - cann_version: '8.0.0.beta1'
+            cann_chip: '310p'
+            os_base: 'ubuntu'
+            os_version: '20.04'
+          - cann_version: '8.0.RC3.beta1'
+            cann_chip: '910b'
+            os_base: 'ubuntu'
+            os_version: '20.04'
+          - cann_version: '8.0.RC3.beta1'
+            cann_chip: '310p'
+            os_base: 'ubuntu'
+            os_version: '20.04'
+          - cann_version: '8.0.RC2.beta1'
+            cann_chip: '910b'
+            os_base: 'ubuntu'
+            os_version: '20.04'
+          - cann_version: '8.0.RC2.beta1'
+            cann_chip: '310p'
+            os_base: 'ubuntu'
+            os_version: '20.04'
     steps:
       - name: Maximize Docker Build Space
         uses: gpustack/.github/.github/actions/maximize-docker-build-space@main
@@ -89,11 +106,11 @@ jobs:
             CANN_CHIP=${{ matrix.cann_chip }}
             BASE_VERSION=${{ matrix.os_version }}
             PY_VERSION=3.10
-          tags: "gpustack/devel-ascendai-cann:${{ steps.prepare.outputs.cann_version_lowercase }}-${{ matrix.cann_chip }}-${{ matrix.os_base }}${{ matrix.os_version }}"
+          tags: "gpustack/devel-ascendai-cann:${{ steps.prepare.outputs.cann_version_lowercase }}-${{ matrix.cann_chip }}-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }}"
           cache-from: |
-            type=registry,ref=gpustack/build-cache:devel-ascendai-cann-${{ steps.prepare.outputs.cann_version_lowercase }}-${{ matrix.cann_chip }}-${{ matrix.os_base }}${{ matrix.os_version }}
+            type=registry,ref=gpustack/build-cache:devel-ascendai-cann-${{ steps.prepare.outputs.cann_version_lowercase }}-${{ matrix.cann_chip }}-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }}
           cache-to: |
-            type=registry,mode=max,oci-mediatypes=false,compression=gzip,ref=gpustack/build-cache:devel-ascendai-cann-${{ steps.prepare.outputs.cann_version_lowercase }}-${{ matrix.cann_chip }}-${{ matrix.os_base }}${{ matrix.os_version }},ignore-error=true
+            type=registry,mode=max,oci-mediatypes=false,compression=gzip,ref=gpustack/build-cache:devel-ascendai-cann-${{ steps.prepare.outputs.cann_version_lowercase }}-${{ matrix.cann_chip }}-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }},ignore-error=true
           provenance: true
           sbom: true
 
@@ -143,11 +160,11 @@ jobs:
           platforms: "linux/amd64${{ matrix.os_base != 'centos' && ',linux/arm64' || '' }}"
           build-args: |
             BASE_VERSION=${{ matrix.os_version }}
-          tags: "gpustack/devel-cpu:${{ matrix.os_base }}${{ matrix.os_version }}"
+          tags: "gpustack/devel-cpu:${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }}"
           cache-from: |
-            type=registry,ref=gpustack/build-cache:devel-cpu-${{ matrix.os_base }}${{ matrix.os_version }}
+            type=registry,ref=gpustack/build-cache:devel-cpu-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }}
           cache-to: |
-            type=registry,mode=max,oci-mediatypes=false,compression=gzip,ref=gpustack/build-cache:devel-cpu-${{ matrix.os_base }}${{ matrix.os_version }},ignore-error=true
+            type=registry,mode=max,oci-mediatypes=false,compression=gzip,ref=gpustack/build-cache:devel-cpu-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }},ignore-error=true
           provenance: true
           sbom: true
 
@@ -210,11 +227,11 @@ jobs:
           build-args: |
             CUDA_VERSION=${{ matrix.cuda_version }}
             BASE_VERSION=${{ matrix.os_version }}
-          tags: "gpustack/devel-nvidia-cuda:${{ matrix.cuda_version }}-${{ matrix.os_base }}${{ matrix.os_version }}"
+          tags: "gpustack/devel-nvidia-cuda:${{ matrix.cuda_version }}-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }}"
           cache-from: |
-            type=registry,ref=gpustack/build-cache:devel-nvidia-cuda-${{ matrix.cuda_version }}-${{ matrix.os_base }}${{ matrix.os_version }}
+            type=registry,ref=gpustack/build-cache:devel-nvidia-cuda-${{ matrix.cuda_version }}-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }}
           cache-to: |
-            type=registry,mode=max,oci-mediatypes=false,compression=gzip,ref=gpustack/build-cache:devel-nvidia-cuda-${{ matrix.cuda_version }}-${{ matrix.os_base }}${{ matrix.os_version }},ignore-error=true
+            type=registry,mode=max,oci-mediatypes=false,compression=gzip,ref=gpustack/build-cache:devel-nvidia-cuda-${{ matrix.cuda_version }}-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }},ignore-error=true
           provenance: true
           sbom: true
 
@@ -224,12 +241,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        dtk_version:
-          - '24.04.3'
-        os_base:
-          - 'ubuntu'
-        os_version:
-          - '20.04'
+        include:
+          - dtk_version: '24.04.3'
+            os_base: 'ubuntu'
+            os_version: '20.04'
     steps:
       - name: Maximize Docker Build Space
         uses: gpustack/.github/.github/actions/maximize-docker-build-space@main
@@ -272,11 +287,11 @@ jobs:
           build-args: |
             DTK_VERSION=${{ matrix.dtk_version }}
             BASE_VERSION=${{ matrix.os_version }}
-          tags: "gpustack/devel-hygon-dtk:${{ matrix.dtk_version }}-${{ matrix.os_base }}${{ matrix.os_version }}"
+          tags: "gpustack/devel-hygon-dtk:${{ matrix.dtk_version }}-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }}"
           cache-from: |
-            type=registry,ref=gpustack/build-cache:devel-hygon-dtk-${{ matrix.dtk_version }}-${{ matrix.os_base }}${{ matrix.os_version }}
+            type=registry,ref=gpustack/build-cache:devel-hygon-dtk-${{ matrix.dtk_version }}-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }}
           cache-to: |
-            type=registry,mode=max,oci-mediatypes=false,compression=gzip,ref=gpustack/build-cache:devel-hygon-dtk-${{ matrix.dtk_version }}-${{ matrix.os_base }}${{ matrix.os_version }},ignore-error=true
+            type=registry,mode=max,oci-mediatypes=false,compression=gzip,ref=gpustack/build-cache:devel-hygon-dtk-${{ matrix.dtk_version }}-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }},ignore-error=true
           provenance: true
           sbom: true
 
@@ -286,12 +301,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        hip_version:
-          - '6.2.4'
-        os_base:
-          - 'centos'
-        os_version:
-          - '7'
+        include:
+          - hip_version: '6.2.4'
+            os_base: 'centos'
+            os_version: '7'
     steps:
       - name: Maximize Docker Build Space
         uses: gpustack/.github/.github/actions/maximize-docker-build-space@main
@@ -326,11 +339,11 @@ jobs:
           build-args: |
             HIP_VERSION=${{ matrix.hip_version }}
             BASE_VERSION=${{ matrix.os_version }}
-          tags: "gpustack/devel-rocm-hip:${{ matrix.hip_version }}-${{ matrix.os_base }}${{ matrix.os_version }}"
+          tags: "gpustack/devel-rocm-hip:${{ matrix.hip_version }}-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }}"
           cache-from: |
-            type=registry,ref=gpustack/build-cache:devel-rocm-hip-${{ matrix.hip_version }}-${{ matrix.os_base }}${{ matrix.os_version }}
+            type=registry,ref=gpustack/build-cache:devel-rocm-hip-${{ matrix.hip_version }}-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }}
           cache-to: |
-            type=registry,mode=max,oci-mediatypes=false,compression=gzip,ref=gpustack/build-cache:devel-rocm-hip-${{ matrix.hip_version }}-${{ matrix.os_base }}${{ matrix.os_version }},ignore-error=true
+            type=registry,mode=max,oci-mediatypes=false,compression=gzip,ref=gpustack/build-cache:devel-rocm-hip-${{ matrix.hip_version }}-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }},ignore-error=true
           provenance: true
           sbom: true
 
@@ -340,12 +353,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        musa_version:
-          - 'rc3.1.1'
-        os_base:
-          - 'ubuntu'
-        os_version:
-          - '22.04'
+        include:
+          - musa_version: 'rc3.1.1'
+            os_base: 'ubuntu'
+            os_version: '22.04'
     steps:
       - name: Maximize Docker Build Space
         uses: gpustack/.github/.github/actions/maximize-docker-build-space@main
@@ -380,11 +391,11 @@ jobs:
           build-args: |
             MUSA_VERSION=${{ matrix.musa_version }}
             BASE_VERSION=${{ matrix.os_version }}
-          tags: "gpustack/devel-mthreads-musa:${{ matrix.musa_version }}-${{ matrix.os_base }}${{ matrix.os_version }}"
+          tags: "gpustack/devel-mthreads-musa:${{ matrix.musa_version }}-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }}"
           cache-from: |
-            type=registry,ref=gpustack/build-cache:devel-mthreads-musa-${{ matrix.musa_version }}-${{ matrix.os_base }}${{ matrix.os_version }}
+            type=registry,ref=gpustack/build-cache:devel-mthreads-musa-${{ matrix.musa_version }}-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }}
           cache-to: |
-            type=registry,mode=max,oci-mediatypes=false,compression=gzip,ref=gpustack/build-cache:devel-mthreads-musa-${{ matrix.musa_version }}-${{ matrix.os_base }}${{ matrix.os_version }},ignore-error=true
+            type=registry,mode=max,oci-mediatypes=false,compression=gzip,ref=gpustack/build-cache:devel-mthreads-musa-${{ matrix.musa_version }}-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }},ignore-error=true
           provenance: true
           sbom: true
 
@@ -394,12 +405,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        oneapi_version:
-          - '2025.0.0-0'
-        os_base:
-          - 'ubuntu'
-        os_version:
-          - '22.04'
+        include:
+          - oneapi_version: '2025.0.0-0'
+            os_base: 'ubuntu'
+            os_version: '22.04'
     steps:
       - name: Maximize Docker Build Space
         uses: gpustack/.github/.github/actions/maximize-docker-build-space@main
@@ -434,11 +443,11 @@ jobs:
           build-args: |
             ONEAPI_VERSION=${{ matrix.oneapi_version }}
             BASE_VERSION=${{ matrix.os_version }}
-          tags: "gpustack/devel-intel-oneapi:${{ matrix.oneapi_version }}-${{ matrix.os_base }}${{ matrix.os_version }}"
+          tags: "gpustack/devel-intel-oneapi:${{ matrix.oneapi_version }}-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }}"
           cache-from: |
-            type=registry,ref=gpustack/build-cache:devel-intel-oneapi-${{ matrix.oneapi_version }}-${{ matrix.os_base }}${{ matrix.os_version }}
+            type=registry,ref=gpustack/build-cache:devel-intel-oneapi-${{ matrix.oneapi_version }}-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }}
           cache-to: |
-            type=registry,mode=max,oci-mediatypes=false,compression=gzip,ref=gpustack/build-cache:devel-intel-oneapi-${{ matrix.oneapi_version }}-${{ matrix.os_base }}${{ matrix.os_version }},ignore-error=true
+            type=registry,mode=max,oci-mediatypes=false,compression=gzip,ref=gpustack/build-cache:devel-intel-oneapi-${{ matrix.oneapi_version }}-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }},ignore-error=true
           provenance: true
           sbom: true
 
@@ -448,13 +457,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        vulkan_version:
-          - '1.4.304'
-          - '1.3.296'
-        os_base:
-          - 'ubuntu'
-        os_version:
-          - '22.04'
+        include:
+          - vulkan_version: '1.4.304'
+            os_base: 'ubuntu'
+            os_version: '22.04'
+          - vulkan_version: '1.3.296'
+            os_base: 'ubuntu'
+            os_version: '22.04'
     steps:
       - name: Maximize Docker Build Space
         uses: gpustack/.github/.github/actions/maximize-docker-build-space@main
@@ -490,10 +499,10 @@ jobs:
           build-args: |
             VULKAN_VERSION=${{ matrix.vulkan_version }}
             BASE_VERSION=${{ matrix.os_version }}
-          tags: "gpustack/devel-lunarg-vulkan:${{ matrix.vulkan_version }}-${{ matrix.os_base }}${{ matrix.os_version }}"
+          tags: "gpustack/devel-lunarg-vulkan:${{ matrix.vulkan_version }}-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }}"
           cache-from: |
-            type=registry,ref=gpustack/build-cache:devel-lunarg-vulkan-${{ matrix.vulkan_version }}-${{ matrix.os_base }}${{ matrix.os_version }}
+            type=registry,ref=gpustack/build-cache:devel-lunarg-vulkan-${{ matrix.vulkan_version }}-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }}
           cache-to: |
-            type=registry,mode=max,oci-mediatypes=false,compression=gzip,ref=gpustack/build-cache:devel-lunarg-vulkan-${{ matrix.vulkan_version }}-${{ matrix.os_base }}${{ matrix.os_version }},ignore-error=true
+            type=registry,mode=max,oci-mediatypes=false,compression=gzip,ref=gpustack/build-cache:devel-lunarg-vulkan-${{ matrix.vulkan_version }}-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }},ignore-error=true
           provenance: true
           sbom: true
