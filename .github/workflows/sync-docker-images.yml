@@ -1,0 +1,86 @@
+name: sync-docker-images
+
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+
+defaults:
+  run:
+    shell: bash
+
+on:
+  workflow_dispatch: 
+    inputs:
+      maximize-build-space:
+        description: 'Maximize build space.'
+        required: false
+        type: boolean
+        default: false
+      maximize-build-space-in-deepth:
+        description: 'Maximize build space in deepth.'
+        required: false
+        type: boolean
+        default: false
+      src-registry:
+        description: 'Registry of source Docker registry.'
+        required: true
+        default: 'docker.io'
+        type: string
+      src-image:
+        description: 'Source Docker image, inform of "namespace/name:tag".'
+        required: true
+        type: string
+      src-username:
+        description: 'Username of source Docker registry.'
+        required: false
+        type: string
+      src-token:
+        description: 'Temporary token of source Docker registry.'
+        required: false
+        type: string
+      dst-registry:
+        description: 'Registry of destination Docker registry.'
+        required: true
+        default: 'docker.io'
+        type: string
+      dst-image:
+        description: 'Destination Docker image, inform of "namespace/name:tag", usually the same as Source Docker image.'
+        required: false
+        type: string
+      dst-username:
+        description: 'Username of destination Docker registry.'
+        required: true
+        type: string
+      dst-token:
+        description: 'Temporary token of destination Docker registry.'
+        required: true
+        type: string
+
+jobs:
+  sync:
+    runs-on: macos-14
+    steps:
+      - name: Maximize Build Space
+        if: ${{ inputs.maximize-build-space }}
+        uses: gpustack/.github/.github/actions/maximize-build-space@main
+        with:
+          root-reserve-mb: 1024
+          temp-reserve-mb: 1024
+          swap-size-mb: 1024
+          deep-clean: ${{ inputs.maximize-build-space-in-deepth }}
+      - name: Deps
+        run: |
+          #!/usr/bin/env bash
+
+          brew install skopeo
+      - name: Sync
+        run: |
+          #!/usr/bin/env bash
+
+          if [[ -n "${{ inputs.src-token }}" ]]; then
+            skopeo login ${{ inputs.src-registry }} -u ${{ inputs.src-username }} -p ${{ inputs.src-token }}
+          fi
+          skopeo login ${{ inputs.dst-registry }} -u ${{ inputs.dst-username }} -p ${{ inputs.dst-token }}
+
+          skopeo copy docker://${{ inputs.src-registry }}/${{ inputs.src-image }} docker://${{ inputs.dst-registry }}/${{ inputs.dst-image }} --all --retry-delay 5s --retry-times 10
