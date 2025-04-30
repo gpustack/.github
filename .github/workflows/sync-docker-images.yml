@@ -12,16 +12,6 @@ defaults:
 on:
   workflow_dispatch: 
     inputs:
-      maximize-build-space:
-        description: 'Maximize build space.'
-        required: false
-        type: boolean
-        default: false
-      maximize-build-space-in-deepth:
-        description: 'Maximize build space in deepth.'
-        required: false
-        type: boolean
-        default: false
       src-registry:
         description: 'Registry of source Docker registry.'
         required: true
@@ -61,14 +51,6 @@ jobs:
   sync:
     runs-on: macos-14
     steps:
-      - name: Maximize Build Space
-        if: ${{ inputs.maximize-build-space }}
-        uses: gpustack/.github/.github/actions/maximize-build-space@main
-        with:
-          root-reserve-mb: 1024
-          temp-reserve-mb: 1024
-          swap-size-mb: 1024
-          deep-clean: ${{ inputs.maximize-build-space-in-deepth }}
       - name: Deps
         run: |
           #!/usr/bin/env bash
