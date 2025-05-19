@@ -110,7 +110,7 @@ jobs:
           cache-from: |
             type=registry,ref=gpustack/build-cache:devel-ascendai-cann-${{ steps.prepare.outputs.cann_version_lowercase }}-${{ matrix.cann_chip }}-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }}
           cache-to: |
-            type=registry,mode=max,oci-mediatypes=false,compression=gzip,ref=gpustack/build-cache:devel-ascendai-cann-${{ steps.prepare.outputs.cann_version_lowercase }}-${{ matrix.cann_chip }}-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }},ignore-error=true
+            type=registry,mode=max,compression=gzip,ref=gpustack/build-cache:devel-ascendai-cann-${{ steps.prepare.outputs.cann_version_lowercase }}-${{ matrix.cann_chip }}-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }},ignore-error=true
           provenance: true
           sbom: true
 
@@ -164,7 +164,7 @@ jobs:
           cache-from: |
             type=registry,ref=gpustack/build-cache:devel-cpu-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }}
           cache-to: |
-            type=registry,mode=max,oci-mediatypes=false,compression=gzip,ref=gpustack/build-cache:devel-cpu-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }},ignore-error=true
+            type=registry,mode=max,compression=gzip,ref=gpustack/build-cache:devel-cpu-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }},ignore-error=true
           provenance: true
           sbom: true
 
@@ -228,7 +228,7 @@ jobs:
           cache-from: |
             type=registry,ref=gpustack/build-cache:devel-nvidia-cuda-${{ matrix.cuda_version }}-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }}
           cache-to: |
-            type=registry,mode=max,oci-mediatypes=false,compression=gzip,ref=gpustack/build-cache:devel-nvidia-cuda-${{ matrix.cuda_version }}-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }},ignore-error=true
+            type=registry,mode=max,compression=gzip,ref=gpustack/build-cache:devel-nvidia-cuda-${{ matrix.cuda_version }}-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }},ignore-error=true
           provenance: true
           sbom: true
 
@@ -288,7 +288,7 @@ jobs:
           cache-from: |
             type=registry,ref=gpustack/build-cache:devel-hygon-dtk-${{ matrix.dtk_version }}-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }}
           cache-to: |
-            type=registry,mode=max,oci-mediatypes=false,compression=gzip,ref=gpustack/build-cache:devel-hygon-dtk-${{ matrix.dtk_version }}-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }},ignore-error=true
+            type=registry,mode=max,compression=gzip,ref=gpustack/build-cache:devel-hygon-dtk-${{ matrix.dtk_version }}-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }},ignore-error=true
           provenance: true
           sbom: true
 
@@ -343,7 +343,7 @@ jobs:
           cache-from: |
             type=registry,ref=gpustack/build-cache:devel-rocm-hip-${{ matrix.hip_version }}-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }}
           cache-to: |
-            type=registry,mode=max,oci-mediatypes=false,compression=gzip,ref=gpustack/build-cache:devel-rocm-hip-${{ matrix.hip_version }}-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }},ignore-error=true
+            type=registry,mode=max,compression=gzip,ref=gpustack/build-cache:devel-rocm-hip-${{ matrix.hip_version }}-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }},ignore-error=true
           provenance: true
           sbom: true
 
@@ -395,7 +395,7 @@ jobs:
           cache-from: |
             type=registry,ref=gpustack/build-cache:devel-mthreads-musa-${{ matrix.musa_version }}-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }}
           cache-to: |
-            type=registry,mode=max,oci-mediatypes=false,compression=gzip,ref=gpustack/build-cache:devel-mthreads-musa-${{ matrix.musa_version }}-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }},ignore-error=true
+            type=registry,mode=max,compression=gzip,ref=gpustack/build-cache:devel-mthreads-musa-${{ matrix.musa_version }}-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }},ignore-error=true
           provenance: true
           sbom: true
 
@@ -447,7 +447,7 @@ jobs:
           cache-from: |
             type=registry,ref=gpustack/build-cache:devel-intel-oneapi-${{ matrix.oneapi_version }}-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }}
           cache-to: |
-            type=registry,mode=max,oci-mediatypes=false,compression=gzip,ref=gpustack/build-cache:devel-intel-oneapi-${{ matrix.oneapi_version }}-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }},ignore-error=true
+            type=registry,mode=max,compression=gzip,ref=gpustack/build-cache:devel-intel-oneapi-${{ matrix.oneapi_version }}-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }},ignore-error=true
           provenance: true
           sbom: true
 
@@ -503,6 +503,6 @@ jobs:
           cache-from: |
             type=registry,ref=gpustack/build-cache:devel-lunarg-vulkan-${{ matrix.vulkan_version }}-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }}
           cache-to: |
-            type=registry,mode=max,oci-mediatypes=false,compression=gzip,ref=gpustack/build-cache:devel-lunarg-vulkan-${{ matrix.vulkan_version }}-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }},ignore-error=true
+            type=registry,mode=max,compression=gzip,ref=gpustack/build-cache:devel-lunarg-vulkan-${{ matrix.vulkan_version }}-${{ matrix.os_base }}${{ matrix.os_version }}${{ env.suffix }},ignore-error=true
           provenance: true
           sbom: true
