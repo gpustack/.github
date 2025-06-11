@@ -5,7 +5,8 @@ FROM image.sourcefind.cn:5000/dcu/admin/base/dtk:${DTK_VERSION}-ubuntu${BASE_VER
 SHELL ["/bin/bash", "-eo", "pipefail", "-c"]
 
 # SOURCE
-RUN apt-get update -y && apt-get install -y software-properties-common apt-transport-https \
+RUN apt-get update -y && apt-get install -y software-properties-common apt-transport-https ca-certificates gnupg2 lsb-release gnupg-agent \
+      && apt-get update -y \
       && add-apt-repository -y ppa:ubuntu-toolchain-r/test \
       && apt-get update -y
 
