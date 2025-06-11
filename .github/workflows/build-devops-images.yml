@@ -239,9 +239,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - dtk_version: '24.04.3'
+          - dtk_version: '25.04'
             os_base: 'ubuntu'
-            os_version: '20.04'
+            os_version: '22.04'
     steps:
       - name: Maximize Docker Build Space
         uses: gpustack/.github/.github/actions/maximize-docker-build-space@main

@@ -1,7 +1,7 @@
-ARG DTK_VERSION=24.04.3
-ARG BASE_VERSION=20.04
+ARG DTK_VERSION=25.04
+ARG BASE_VERSION=22.04
 
-FROM image.sourcefind.cn:5000/dcu/admin/base/dtk:${DTK_VERSION}-py3.8-ubuntu${BASE_VERSION}
+FROM image.sourcefind.cn:5000/dcu/admin/base/dtk:${DTK_VERSION}-ubuntu${BASE_VERSION}-py3.10-fixpy
 SHELL ["/bin/bash", "-eo", "pipefail", "-c"]
 
 # SOURCE
