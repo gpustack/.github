@@ -387,7 +387,7 @@ jobs:
           push: true
           file: ${{ github.workspace }}/musa/${{ matrix.os_base }}/Dockerfile
           context: ${{ github.workspace }}/musa
-          platforms: "linux/amd64${{ matrix.os_base != 'centos' && ',linux/arm64' || '' }}"
+          platforms: "linux/amd64"
           build-args: |
             MUSA_VERSION=${{ matrix.musa_version }}
             BASE_VERSION=${{ matrix.os_version }}
