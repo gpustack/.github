@@ -1,7 +1,7 @@
-ARG MUSA_VERSION=rc4.1.0
+ARG MUSA_VERSION=rc4.2.0
 ARG BASE_VERSION=22.04
 
-FROM mthreads/musa:${MUSA_VERSION}-mudnn-devel-ubuntu${BASE_VERSION}
+FROM mthreads/musa:${MUSA_VERSION}-devel-ubuntu${BASE_VERSION}-amd64
 SHELL ["/bin/bash", "-eo", "pipefail", "-c"]
 
 # SOURCE
