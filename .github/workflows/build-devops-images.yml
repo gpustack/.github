@@ -354,7 +354,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - musa_version: '4.2.0'
+          - musa_version: 'rc4.2.0'
             os_base: 'ubuntu'
             os_version: '22.04'
     steps:
