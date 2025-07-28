@@ -271,12 +271,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - hip_version: '6.2.4'
-            os_base: 'centos'
-            os_version: '7'
-          - hip_version: '6.3.3'
+          - hip_version: '6.4.2'
             os_base: 'ubuntu'
-            os_version: '20.04'
+            os_version: '22.04'
     steps:
       - name: Maximize Docker Build Space
         uses: gpustack/.github/.github/actions/maximize-docker-build-space@main
