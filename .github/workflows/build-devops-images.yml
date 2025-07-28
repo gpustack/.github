@@ -161,7 +161,7 @@ jobs:
         include:
           - os_base: 'rockylinux'
             os_version: '8'
-            cuda_version: '12.8.0'
+            cuda_version: '12.8.1'
     steps:
       - name: Maximize Docker Build Space
         uses: gpustack/.github/.github/actions/maximize-docker-build-space@main
