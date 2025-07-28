@@ -38,11 +38,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - cann_version: '8.1.RC1.beta1'
+          - cann_version: '8.2.RC1'
             cann_chip: '910b'
             os_base: 'ubuntu'
             os_version: '20.04'
-          - cann_version: '8.1.RC1.beta1'
+          - cann_version: '8.2.RC1'
             cann_chip: '310p'
             os_base: 'ubuntu'
             os_version: '20.04'
