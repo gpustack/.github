@@ -1,0 +1,45 @@
+name: sync-docker-repository
+
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+
+defaults:
+  run:
+    shell: bash
+
+on:
+  workflow_dispatch:
+    inputs:
+      src-repository:
+        description: 'Source Docker repository, inform of "namespace/name".'
+        required: true
+        default: 'gpustack/gpustack'
+        type: string
+      dst-namespace:
+        description: 'Destination ACR namespace, inform of "namespace".'
+        required: true
+        default: 'gpustack'
+        type: string
+      tag-exclude-regex:
+        description: 'Regex to exclude tags from being synced.'
+        required: false
+        default: 'main|-dev'
+        type: string
+
+jobs:
+  sync:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Deps
+        run: |
+          #!/usr/bin/env bash
+          wget -q ${{ secrets.SKOPEO_PATCH }} -O skopeo-ubuntu-22.04.tar.gz
+          tar -xzvf skopeo-ubuntu-22.04.tar.gz
+
+      - name: Sync
+        run: |
+          #!/usr/bin/env bash
+          ./skopeo-ubuntu-22.04 login -u ${{ secrets.CI_ACR_USERNAME }} -p ${{ secrets.CI_ACR_PASSWORD }} gpustack-registry.cn-hangzhou.cr.aliyuncs.com
+          ./skopeo-ubuntu-22.04 sync --all --retry-delay 5s --retry-times 10 --exclude-regex "${{ inputs.tag-exclude-regex }}" --src docker --dest docker docker.io/${{ inputs.src-repository }} gpustack-registry.cn-hangzhou.cr.aliyuncs.com/${{ inputs.dst-namespace }}
