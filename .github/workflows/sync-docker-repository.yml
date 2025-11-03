@@ -35,7 +35,7 @@ jobs:
       - name: Deps
         run: |
           #!/usr/bin/env bash
-          wget -q ${{ secrets.SKOPEO_PATCH }} -O skopeo-ubuntu-22.04.tar.gz
+          wget -q https://github.com/foyoux/skopeo/releases/latest/download/skopeo-ubuntu-22.04.tar.gz -O skopeo-ubuntu-22.04.tar.gz
           tar -xzvf skopeo-ubuntu-22.04.tar.gz
 
       - name: Sync
