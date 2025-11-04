@@ -17,6 +17,11 @@ on:
         required: true
         default: 'gpustack/gpustack'
         type: string
+      dst-registry:
+        description: 'Destination ACR registry.'
+        required: true
+        default: 'gpustack-registry.cn-hangzhou.cr.aliyuncs.com'
+        type: string
       dst-namespace:
         description: 'Destination ACR namespace, inform of "namespace".'
         required: true
@@ -41,5 +46,5 @@ jobs:
       - name: Sync
         run: |
           #!/usr/bin/env bash
-          ./skopeo-ubuntu-22.04 login -u ${{ secrets.CI_ACR_USERNAME }} -p ${{ secrets.CI_ACR_PASSWORD }} gpustack-registry.cn-hangzhou.cr.aliyuncs.com
-          ./skopeo-ubuntu-22.04 sync --all --retry-delay 5s --retry-times 10 --exclude-regex "${{ inputs.tag-exclude-regex }}" --src docker --dest docker docker.io/${{ inputs.src-repository }} gpustack-registry.cn-hangzhou.cr.aliyuncs.com/${{ inputs.dst-namespace }}
+          ./skopeo-ubuntu-22.04 login -u ${{ secrets.CI_ACR_USERNAME }} -p ${{ secrets.CI_ACR_PASSWORD }} ${{ inputs.dst-registry }}
+          ./skopeo-ubuntu-22.04 sync --all --retry-delay 5s --retry-times 10 --exclude-regex "${{ inputs.tag-exclude-regex }}" --src docker --dest docker docker.io/${{ inputs.src-repository }} ${{ inputs.dst-registry }}/${{ inputs.dst-namespace }}
