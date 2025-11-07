@@ -27,10 +27,15 @@ on:
         required: true
         default: 'gpustack_ai'
         type: string
+      tag-include-regex:
+        description: 'Regex to include tags from being synced.'
+        required: false
+        default: ''
+        type: string
       tag-exclude-regex:
         description: 'Regex to exclude tags from being synced.'
         required: false
-        default: 'main|-dev|rc'
+        default: 'main|-dev|[^.]rc'
         type: string
 
 jobs:
@@ -47,4 +52,4 @@ jobs:
         run: |
           #!/usr/bin/env bash
           ./skopeo-ubuntu-22.04 login -u ${{ secrets.CI_DOCKER_MIRROR_USERNAME }} -p ${{ secrets.CI_DOCKER_MIRROR_PASSWORD }} ${{ inputs.dst-registry }}
-          ./skopeo-ubuntu-22.04 sync --all --retry-delay 5s --retry-times 10 --exclude-regex "${{ inputs.tag-exclude-regex }}" --src docker --dest docker docker.io/${{ inputs.src-repository }} ${{ inputs.dst-registry }}/${{ inputs.dst-namespace }}
+          ./skopeo-ubuntu-22.04 sync --all --retry-delay 5s --retry-times 10 --include-regex "${{ inputs.tag-include-regex }}" --exclude-regex "${{ inputs.tag-exclude-regex }}" --src docker --dest docker docker.io/${{ inputs.src-repository }} ${{ inputs.dst-registry }}/${{ inputs.dst-namespace }}
