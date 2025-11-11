@@ -20,17 +20,17 @@ on:
       dst-registry:
         description: 'Destination Docker registry.'
         required: true
-        default: 'crpi-thyzhdzt86bexebt.cn-hangzhou.personal.cr.aliyuncs.com'
+        default: 'quay.io'
         type: string
       dst-namespace:
         description: 'Destination Docker namespace, inform of "namespace".'
         required: true
-        default: 'gpustack_ai'
+        default: 'gpustack'
         type: string
       tag-include-regex:
         description: 'Regex to include tags from being synced.'
         required: false
-        default: ''
+        default: 'latest|v2'
         type: string
       tag-exclude-regex:
         description: 'Regex to exclude tags from being synced.'
