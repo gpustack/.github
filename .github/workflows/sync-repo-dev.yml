@@ -1,0 +1,68 @@
+name: sync-repo-dev
+
+on:
+  schedule:
+    - cron: "25 18 * * 0"
+    - cron: "45 */4 * * *"
+  workflow_dispatch:
+    inputs:
+      step:
+        description: "Select the step to run"
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - gpustack
+          - runner/runtime
+
+jobs:
+  sync-gpustack:
+    if: github.event.schedule == '45 */4 * * *' || github.event_name == 'workflow_dispatch' && (github.event.inputs.step == 'all' || github.event.inputs.step == 'gpustack')
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Set up Docker
+        uses: docker/setup-docker-action@v4
+
+      - name: Pull gpustack/gpustack:main
+        run: docker pull gpustack/gpustack:main
+
+      - name: Run gpustack copy-images
+        run: |
+          docker run --rm --entrypoint "" gpustack/gpustack:main gpustack copy-images \
+            --repository gpustack \
+            --dest ${{ vars.DOCKER_MIRROR_REGISTER }} \
+            --dest-user ${{ secrets.DOCKER_MIRROR_USER }} \
+            --dest-passwd ${{ secrets.DOCKER_MIRROR_PASSWORD }}
+
+  sync-runner-runtime:
+    if: github.event.schedule == '25 18 * * 0' || github.event_name == 'workflow_dispatch' && (github.event.inputs.step == 'all' || github.event.inputs.step == 'runner/runtime')
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [ cann, corex, cuda, dtk, maca, musa, neuware, rocm ]
+
+    steps:
+      - name: Set up Docker
+        uses: docker/setup-docker-action@v4
+
+      - name: Pull gpustack/gpustack:main
+        run: docker pull gpustack/gpustack:main
+
+      - name: Run gpustack copy-images
+        run: |
+          docker run --rm --entrypoint "" gpustack/gpustack:main gpustack copy-images \
+            --repository runner \
+            --backend ${{ matrix.backend }} \
+            --dest ${{ vars.DOCKER_MIRROR_REGISTER }} \
+            --dest-user ${{ secrets.DOCKER_MIRROR_USER }} \
+            --dest-passwd ${{ secrets.DOCKER_MIRROR_PASSWORD }}
+
+          docker run --rm --entrypoint "" gpustack/gpustack:main gpustack copy-images \
+            --repository runtime \
+            --backend ${{ matrix.backend }} \
+            --dest ${{ vars.DOCKER_MIRROR_REGISTER }} \
+            --dest-user ${{ secrets.DOCKER_MIRROR_USER }} \
+            --dest-passwd ${{ secrets.DOCKER_MIRROR_PASSWORD }}
