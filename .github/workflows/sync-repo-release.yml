@@ -2,8 +2,6 @@ name: sync-repo-release
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "25 16 * * 6"
 
 jobs:
   sync-gpustack:
