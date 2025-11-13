@@ -1,0 +1,25 @@
+name: sync-repo-dev
+
+on:
+  schedule:
+    - cron: "45 */4 * * *"
+  workflow_dispatch:
+
+jobs:
+  sync-gpustack:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Set up Docker
+        uses: docker/setup-docker-action@v4
+
+      - name: Pull gpustack/gpustack:main
+        run: docker pull gpustack/gpustack:main
+
+      - name: Run gpustack copy-images
+        run: |
+          docker run --rm --entrypoint "" gpustack/gpustack:main gpustack copy-images \
+            --repository gpustack \
+            --dest ${{ vars.DOCKER_MIRROR_REGISTER }} \
+            --dest-user ${{ secrets.DOCKER_MIRROR_USER }} \
+            --dest-passwd ${{ secrets.DOCKER_MIRROR_PASSWORD }}
