@@ -1,4 +1,4 @@
-name: sync-runner-runtime
+name: sync-gpustack-runner-images-weekly
 
 on:
   schedule:

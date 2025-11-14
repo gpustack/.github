@@ -1,4 +1,4 @@
-name: sync-repo-dev
+name: sync-main-gpustack-images-daily
 
 on:
   schedule:

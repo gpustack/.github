@@ -1,4 +1,4 @@
-name: sync-repo-release
+name: sync-latest-release-gpustack-images
 
 on:
   workflow_dispatch:
