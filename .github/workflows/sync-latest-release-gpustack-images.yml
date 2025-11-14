@@ -24,7 +24,7 @@ jobs:
         run: |
           docker run --rm --entrypoint "" gpustack/gpustack:${{ steps.latest_release.outputs.tag }} gpustack copy-images \
             --repository gpustack \
-            --dest ${{ vars.DOCKER_MIRROR_REGISTER }} \
+            --dest ${{ vars.DOCKER_MIRROR_REGISTRY }} \
             --dest-user ${{ secrets.DOCKER_MIRROR_USER }} \
             --dest-passwd ${{ secrets.DOCKER_MIRROR_PASSWORD }}
 
@@ -54,13 +54,13 @@ jobs:
           docker run --rm --entrypoint "" gpustack/gpustack:${{ steps.latest_release.outputs.tag }} gpustack copy-images \
             --repository runner \
             --backend ${{ matrix.backend }} \
-            --dest ${{ vars.DOCKER_MIRROR_REGISTER }} \
+            --dest ${{ vars.DOCKER_MIRROR_REGISTRY }} \
             --dest-user ${{ secrets.DOCKER_MIRROR_USER }} \
             --dest-passwd ${{ secrets.DOCKER_MIRROR_PASSWORD }}
 
           docker run --rm --entrypoint "" gpustack/gpustack:${{ steps.latest_release.outputs.tag }} gpustack copy-images \
             --repository runtime \
             --backend ${{ matrix.backend }} \
-            --dest ${{ vars.DOCKER_MIRROR_REGISTER }} \
+            --dest ${{ vars.DOCKER_MIRROR_REGISTRY }} \
             --dest-user ${{ secrets.DOCKER_MIRROR_USER }} \
             --dest-passwd ${{ secrets.DOCKER_MIRROR_PASSWORD }}
