@@ -1,0 +1,47 @@
+name: sync-gpustack-runner-images-weekly
+
+on:
+  schedule:
+    - cron: "25 18 * * 0"
+  workflow_dispatch:
+
+jobs:
+  sync-runtime:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Set up Docker
+        uses: docker/setup-docker-action@v4
+
+      - name: Pull gpustack/gpustack:main
+        run: docker pull gpustack/gpustack:main
+
+      - name: Run gpustack copy-images
+        run: |
+          docker run --rm --entrypoint "" gpustack/gpustack:main gpustack copy-images \
+            --repository runtime \
+            --dest ${{ vars.DOCKER_MIRROR_REGISTER }} \
+            --dest-user ${{ secrets.DOCKER_MIRROR_USER }} \
+            --dest-passwd ${{ secrets.DOCKER_MIRROR_PASSWORD }}
+
+  sync-runner:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [ cann, corex, cuda, dtk, maca, musa, neuware, rocm ]
+
+    steps:
+      - name: Set up Docker
+        uses: docker/setup-docker-action@v4
+
+      - name: Pull gpustack/gpustack:main
+        run: docker pull gpustack/gpustack:main
+
+      - name: Run gpustack copy-images
+        run: |
+          docker run --rm --entrypoint "" gpustack/gpustack:main gpustack copy-images \
+            --repository runner \
+            --backend ${{ matrix.backend }} \
+            --dest ${{ vars.DOCKER_MIRROR_REGISTER }} \
+            --dest-user ${{ secrets.DOCKER_MIRROR_USER }} \
+            --dest-passwd ${{ secrets.DOCKER_MIRROR_PASSWORD }}

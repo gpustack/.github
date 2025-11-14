@@ -1,0 +1,66 @@
+name: sync-latest-release-gpustack-images
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sync-gpustack:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Fetch latest release tag (include pre-release)
+        id: latest_release
+        run: |
+          tag=$(curl -s "https://api.github.com/repos/gpustack/gpustack/releases?per_page=1" | jq -r '.[0].tag_name')
+          echo "Latest release tag: $tag"
+          echo "tag=$tag" >> $GITHUB_OUTPUT
+
+      - name: Set up Docker
+        uses: docker/setup-docker-action@v4
+
+      - name: Pull gpustack/gpustack:${{ steps.latest_release.outputs.tag }}
+        run: docker pull gpustack/gpustack:${{ steps.latest_release.outputs.tag }}
+
+      - name: Run gpustack copy-images
+        run: |
+          docker run --rm --entrypoint "" gpustack/gpustack:${{ steps.latest_release.outputs.tag }} gpustack copy-images \
+            --repository gpustack \
+            --dest ${{ vars.DOCKER_MIRROR_REGISTER }} \
+            --dest-user ${{ secrets.DOCKER_MIRROR_USER }} \
+            --dest-passwd ${{ secrets.DOCKER_MIRROR_PASSWORD }}
+
+  sync-runner-runtime:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [ cann, corex, cuda, dtk, maca, musa, neuware, rocm ]
+
+    steps:
+      - name: Fetch latest release tag (include pre-release)
+        id: latest_release
+        run: |
+          tag=$(curl -s "https://api.github.com/repos/gpustack/gpustack/releases?per_page=1" | jq -r '.[0].tag_name')
+          echo "Latest release tag: $tag"
+          echo "tag=$tag" >> $GITHUB_OUTPUT
+
+      - name: Set up Docker
+        uses: docker/setup-docker-action@v4
+
+      - name: Pull gpustack/gpustack:${{ steps.latest_release.outputs.tag }}
+        run: docker pull gpustack/gpustack:${{ steps.latest_release.outputs.tag }}
+
+      - name: Run gpustack copy-images (runner/runtime)
+        run: |
+          docker run --rm --entrypoint "" gpustack/gpustack:${{ steps.latest_release.outputs.tag }} gpustack copy-images \
+            --repository runner \
+            --backend ${{ matrix.backend }} \
+            --dest ${{ vars.DOCKER_MIRROR_REGISTER }} \
+            --dest-user ${{ secrets.DOCKER_MIRROR_USER }} \
+            --dest-passwd ${{ secrets.DOCKER_MIRROR_PASSWORD }}
+
+          docker run --rm --entrypoint "" gpustack/gpustack:${{ steps.latest_release.outputs.tag }} gpustack copy-images \
+            --repository runtime \
+            --backend ${{ matrix.backend }} \
+            --dest ${{ vars.DOCKER_MIRROR_REGISTER }} \
+            --dest-user ${{ secrets.DOCKER_MIRROR_USER }} \
+            --dest-passwd ${{ secrets.DOCKER_MIRROR_PASSWORD }}
