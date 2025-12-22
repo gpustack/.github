@@ -1,0 +1,160 @@
+name: sync-models-universal
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: 'Runner label to use'
+        required: true
+        type: choice
+        options:
+          - ubuntu-22.04
+          - ubuntu-22.04-8x
+          - ubuntu-22.04-16x
+          - ubuntu-22.04-32x
+      maximize-build-space:
+        description: 'Maximize build space.'
+        required: false
+        type: boolean
+        default: true
+      maximize-build-space-in-deepth:
+        description: 'Maximize build space in deepth.'
+        required: false
+        type: boolean
+        default: false
+      source:
+        description: 'Source Platform'
+        required: true
+        type: choice
+        options:
+          - huggingface
+          - modelscope
+          - modelers
+      source-repository:
+        description: 'Source Platform repository (e.g. Qwen/Qwen3-0.6B)'
+        required: true
+        type: string
+      include:
+        description: 'Glob patterns to match files to sync'
+        required: false
+        type: string
+      exclude:
+        description: 'Glob patterns to exclude from files to sync'
+        required: false
+        type: string
+      destination:
+        description: 'Destination Platform'
+        required: true
+        type: choice
+        options:
+          - huggingface
+          - modelscope
+          - modelers
+      destination-repository:
+        description: 'Target repository. Leave empty to use Source name.'
+        required: false
+        type: string
+
+jobs:
+  sync:
+    runs-on: ${{ inputs.runner }}
+    steps:
+      - name: Maximize Build Space
+        if: ${{ inputs.maximize-build-space }}
+        uses: gpustack/.github/.github/actions/maximize-build-space@main
+        with:
+          root-reserve-mb: 1024
+          temp-reserve-mb: 1024
+          swap-size-mb: 1024
+          deep-clean: ${{ inputs.maximize-build-space-in-deepth }}
+
+      - name: Install Dependencies
+        run: pip install -U hf modelscope openmind_hub
+
+      - name: Pre Show Info
+        run: |
+          df -h
+          ls -alth model_cache || true
+
+      - name: Download from Hugging Face
+        if: ${{ inputs.source == 'huggingface' }}
+        run: |
+          hf download ${{ inputs.source-repository }} \
+            --local-dir model_cache \
+            --token ${{ secrets.CI_HUGGINGFACE_TOKEN }} \
+            ${{ inputs.include && format('--include "{0}"', inputs.include) }} \
+            ${{ inputs.exclude && format('--exclude "{0}"', inputs.exclude) }}
+          
+          rm -rf model_cache/.cache
+
+      - name: Download from ModelScope
+        if: ${{ inputs.source == 'modelscope' }}
+        run: |
+          modelscope download ${{ inputs.source-repository }} \
+            --local_dir model_cache \
+            --token ${{ secrets.CI_MODELSCOPE_TOKEN }} \
+            ${{ inputs.include && format('--include "{0}"', inputs.include) }} \
+            ${{ inputs.exclude && format('--exclude "{0}"', inputs.exclude) }}
+          
+          rm -rf model_cache/._____temp model_cache/.msc model_cache/.mv
+
+      - name: Download from Modelers (OpenMind)
+        if: ${{ inputs.source == 'modelers' }}
+        shell: python
+        run: |
+          from openmind_hub import snapshot_download
+
+          repo_id = "${{ inputs.source-repository }}"
+          include_pattern = "${{ inputs.include }}" or None
+          exclude_pattern = "${{ inputs.exclude }}" or None
+
+          snapshot_download(
+              repo_id,
+              local_dir="model_cache",
+              allow_patterns=include_pattern,
+              ignore_patterns=exclude_pattern,
+              token="${{ secrets.CI_MODELERS_TOKEN }}",
+          )
+
+      - name: Show Info
+        run: |
+          ls -alth model_cache || true
+          df -h
+
+      - name: Upload to Hugging Face
+        if: ${{ inputs.destination == 'huggingface' }}
+        run: |
+          hf upload \
+            --token ${{ secrets.CI_HUGGINGFACE_TOKEN }} \
+            ${{ inputs.destination-repository && inputs.destination-repository || inputs.source-repository }} \
+            model_cache
+
+      - name: Upload to ModelScope
+        if: ${{ inputs.destination == 'modelscope' }}
+        run: |
+          modelscope upload \
+            --token ${{ secrets.CI_MODELSCOPE_TOKEN }} \
+            ${{ inputs.destination-repository && inputs.destination-repository || inputs.source-repository }} \
+            model_cache
+
+      - name: Upload to Modelers (OpenMind)
+        if: ${{ inputs.destination == 'modelers' }}
+        shell: python
+        run: |
+          from openmind_hub import upload_folder, create_repo
+
+          target_repo = "${{ steps.config.outputs.dest_repo }}"
+          local_dir = "model_cache"
+          token = "${{ secrets.CI_MODELERS_TOKEN }}"
+
+          try:
+              create_repo(repo_id=target_repo, token=token, exist_ok=True)
+          except Exception as e:
+              print(f"Warning during repo creation: {e}")
+
+          upload_folder(folder_path=local_dir, repo_id=target_repo, token=token)
+
+      - name: Post Show Info
+        run: |
+          ls -alth model_cache || true
+          df -h
