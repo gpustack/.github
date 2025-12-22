@@ -84,6 +84,8 @@ jobs:
             --token ${{ secrets.CI_HUGGINGFACE_TOKEN }} \
             ${{ inputs.include && format('--include "{0}"', inputs.include) }} \
             ${{ inputs.exclude && format('--exclude "{0}"', inputs.exclude) }}
+          
+          rm -rf model_cache/.cache
 
       - name: Download from ModelScope
         if: ${{ inputs.source == 'modelscope' }}
@@ -93,6 +95,8 @@ jobs:
             --token ${{ secrets.CI_MODELSCOPE_TOKEN }} \
             ${{ inputs.include && format('--include "{0}"', inputs.include) }} \
             ${{ inputs.exclude && format('--exclude "{0}"', inputs.exclude) }}
+          
+          rm -rf model_cache/._____temp model_cache/.msc model_cache/.mv
 
       - name: Download from Modelers (OpenMind)
         if: ${{ inputs.source == 'modelers' }}
