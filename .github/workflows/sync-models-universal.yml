@@ -4,14 +4,15 @@ on:
   workflow_dispatch:
     inputs:
       runner:
-        description: 'Runner label to use'
-        required: true
+        description: 'Runner to use.'
+        required: false
         type: choice
         options:
           - ubuntu-22.04
           - ubuntu-22.04-8x
           - ubuntu-22.04-16x
           - ubuntu-22.04-32x
+        default: ubuntu-22.04
       maximize-build-space:
         description: 'Maximize build space.'
         required: false
@@ -23,33 +24,35 @@ on:
         type: boolean
         default: false
       source:
-        description: 'Source Platform'
-        required: true
+        description: 'Source Platform.'
+        required: false
         type: choice
         options:
           - huggingface
           - modelscope
           - modelers
+        default: huggingface
       source-repository:
-        description: 'Source Platform repository (e.g. Qwen/Qwen3-0.6B)'
+        description: 'Source Platform repository (e.g. Qwen/Qwen3-0.6B).'
         required: true
         type: string
       include:
-        description: 'Glob patterns to match files to sync'
+        description: 'Glob patterns to match files to sync.'
         required: false
         type: string
       exclude:
-        description: 'Glob patterns to exclude from files to sync'
+        description: 'Glob patterns to exclude from files to sync.'
         required: false
         type: string
       destination:
-        description: 'Destination Platform'
-        required: true
+        description: 'Destination Platform.'
+        required: false
         type: choice
         options:
           - huggingface
           - modelscope
           - modelers
+        default: modelscope
       destination-repository:
         description: 'Target repository. Leave empty to use Source name.'
         required: false
