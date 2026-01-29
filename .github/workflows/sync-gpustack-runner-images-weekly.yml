@@ -35,11 +35,11 @@ jobs:
         uses: docker/setup-docker-action@v4
 
       - name: Pull gpustack/gpustack:main
-        run: docker pull gpustack/gpustack:main
+        run: docker pull gpustack/gpustack:dev
 
       - name: Run gpustack copy-images
         run: |
-          docker run --rm --entrypoint "" gpustack/gpustack:main gpustack copy-images \
+          docker run --rm --entrypoint "" gpustack/gpustack:dev gpustack copy-images \
             --repository runner \
             --backend ${{ matrix.backend }} \
             --dest ${{ vars.DOCKER_MIRROR_REGISTRY }} \
