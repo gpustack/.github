@@ -12,13 +12,12 @@ jobs:
       - name: Set up Docker
         uses: docker/setup-docker-action@v4
 
-      - name: Pull gpustack/gpustack:main
-        run: docker pull gpustack/gpustack:main
-
       - name: Run gpustack copy-images
         run: |
-          docker run --rm --entrypoint "" gpustack/gpustack:main gpustack copy-images \
+          docker run --pull always --rm --privileged --network host --ipc host --entrypoint "" gpustack/gpustack:dev gpustack copy-images \
             --repository runtime \
+            --max-retries 3 \
+            --max-workers 2 \
             --dest ${{ vars.DOCKER_MIRROR_REGISTRY }} \
             --dest-user ${{ secrets.DOCKER_MIRROR_USER }} \
             --dest-passwd ${{ secrets.DOCKER_MIRROR_PASSWORD }}
@@ -28,19 +27,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        backend: [ cann, corex, cuda, dtk, maca, musa, neuware, rocm ]
+        backend: [ cann, corex, cuda, dtk, maca, musa, neuware, rocm, hggc ]
 
     steps:
       - name: Set up Docker
         uses: docker/setup-docker-action@v4
 
-      - name: Pull gpustack/gpustack:main
-        run: docker pull gpustack/gpustack:dev
-
       - name: Run gpustack copy-images
         run: |
-          docker run --rm --entrypoint "" gpustack/gpustack:dev gpustack copy-images \
+          docker run --pull always --rm --privileged --network host --ipc host --entrypoint "" gpustack/gpustack:dev gpustack copy-images \
             --repository runner \
+            --max-retries 3 \
+            --max-workers 2 \
             --backend ${{ matrix.backend }} \
             --dest ${{ vars.DOCKER_MIRROR_REGISTRY }} \
             --dest-user ${{ secrets.DOCKER_MIRROR_USER }} \
