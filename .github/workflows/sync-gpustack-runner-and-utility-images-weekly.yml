@@ -1,4 +1,4 @@
-name: sync-gpustack-runner-images-weekly
+name: sync-gpustack-runner-and-utility-images-weekly
 
 on:
   schedule:
@@ -12,15 +12,19 @@ jobs:
       - name: Set up Docker
         uses: docker/setup-docker-action@v4
 
-      - name: Run gpustack copy-images
+      - name: Run gpustack copy-images (runtime/benchmark-runner)
         run: |
-          docker run --pull always --rm --privileged --network host --ipc host --entrypoint "" gpustack/gpustack:dev gpustack copy-images \
-            --repository runtime \
-            --max-retries 3 \
-            --max-workers 2 \
-            --dest ${{ vars.DOCKER_MIRROR_REGISTRY }} \
-            --dest-user ${{ secrets.DOCKER_MIRROR_USER }} \
-            --dest-passwd ${{ secrets.DOCKER_MIRROR_PASSWORD }}
+          REPOSITORIES=("runtime" "benchmark-runner")
+          for REPO in "${REPOSITORIES[@]}"; do
+            echo "Syncing repository: $REPO"
+            docker run --pull always --rm --privileged --network host --ipc host --entrypoint "" gpustack/gpustack:dev gpustack copy-images \
+              --repository $REPO \
+              --max-retries 3 \
+              --max-workers 2 \
+              --dest ${{ vars.DOCKER_MIRROR_REGISTRY }} \
+              --dest-user ${{ secrets.DOCKER_MIRROR_USER }} \
+              --dest-passwd ${{ secrets.DOCKER_MIRROR_PASSWORD }}
+          done
 
   sync-runner:
     runs-on: ubuntu-22.04

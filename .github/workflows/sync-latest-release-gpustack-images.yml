@@ -19,15 +19,19 @@ jobs:
 
       - name: Run gpustack copy-images
         run: |
-          docker run --pull always --rm --privileged --network host --ipc host --entrypoint "" gpustack/gpustack:${{ steps.latest_release.outputs.tag }} gpustack copy-images \
-            --repository gpustack \
-            --max-retries 3 \
-            --max-workers 2 \
-            --dest ${{ vars.DOCKER_MIRROR_REGISTRY }} \
-            --dest-user ${{ secrets.DOCKER_MIRROR_USER }} \
-            --dest-passwd ${{ secrets.DOCKER_MIRROR_PASSWORD }}
+          REPOSITORIES=("gpustack" "runtime" "benchmark-runner")
+          for REPO in "${REPOSITORIES[@]}"; do
+            echo "Syncing repository: $REPO"
+            docker run --pull always --rm --privileged --network host --ipc host --entrypoint "" gpustack/gpustack:${{ steps.latest_release.outputs.tag }} gpustack copy-images \
+              --repository $REPO \
+              --max-retries 3 \
+              --max-workers 2 \
+              --dest ${{ vars.DOCKER_MIRROR_REGISTRY }} \
+              --dest-user ${{ secrets.DOCKER_MIRROR_USER }} \
+              --dest-passwd ${{ secrets.DOCKER_MIRROR_PASSWORD }}
+          done
 
-  sync-runner-runtime:
+  sync-runner:
     runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
@@ -45,19 +49,10 @@ jobs:
       - name: Set up Docker
         uses: docker/setup-docker-action@v4
 
-      - name: Run gpustack copy-images (runner/runtime)
+      - name: Run gpustack copy-images (runner)
         run: |
           docker run --pull always --rm --privileged --network host --ipc host --entrypoint "" gpustack/gpustack:${{ steps.latest_release.outputs.tag }} gpustack copy-images \
             --repository runner \
-            --max-retries 3 \
-            --max-workers 2 \
-            --backend ${{ matrix.backend }} \
-            --dest ${{ vars.DOCKER_MIRROR_REGISTRY }} \
-            --dest-user ${{ secrets.DOCKER_MIRROR_USER }} \
-            --dest-passwd ${{ secrets.DOCKER_MIRROR_PASSWORD }}
-
-          docker run --pull always --rm --privileged --network host --ipc host --entrypoint "" gpustack/gpustack:${{ steps.latest_release.outputs.tag }} gpustack copy-images \
-            --repository runtime \
             --max-retries 3 \
             --max-workers 2 \
             --backend ${{ matrix.backend }} \
