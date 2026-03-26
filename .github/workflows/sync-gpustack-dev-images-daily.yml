@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: "45 */4 * * *"
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag to sync (default: dev)"
+        required: false
+        default: "dev"
 
 jobs:
   sync-gpustack:
@@ -15,7 +20,7 @@ jobs:
 
       - name: Run gpustack copy-images
         run: |
-          docker run --pull always --rm --privileged --network host --ipc host --entrypoint "" gpustack/gpustack:dev gpustack copy-images \
+          docker run --pull always --rm --privileged --network host --ipc host --entrypoint "" gpustack/gpustack:${{ inputs.tag || 'dev' }} gpustack copy-images \
             --repository gpustack \
             --max-retries 3 \
             --max-workers 2 \
