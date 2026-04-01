@@ -31,6 +31,14 @@ jobs:
               --dest-passwd ${{ secrets.DOCKER_MIRROR_PASSWORD }}
           done
 
+      - name: Update latest tag
+        run: |
+          echo "Logging registry: ${{ vars.DOCKER_MIRROR_REGISTRY }}"
+          echo "${{ secrets.DOCKER_MIRROR_PASSWORD }}" | docker login ${{ vars.DOCKER_MIRROR_REGISTRY }} -u "${{ secrets.DOCKER_MIRROR_USER }}" --password-stdin
+
+          echo "Updating tag: latest"
+          docker buildx imagetools create -t ${{ vars.DOCKER_MIRROR_REGISTRY }}/gpustack/gpustack:latest gpustack/gpustack:latest
+
   sync-runner:
     runs-on: ubuntu-22.04
     strategy:
