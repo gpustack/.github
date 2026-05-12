@@ -14,27 +14,13 @@ jobs:
 
       - name: Run gpustack copy-images (runtime/benchmark-runner/utilities)
         run: |
-          REPOSITORIES=(
-            "runtime"
-            "benchmark-runner"
-            "gpustack-operator"
-            "higress-plugins"
-            "mirrored-higress-higress"
-            "mirrored-higress-pilot"
-            "mirrored-higress-gateway"
-            "mirrored-kueue"
-            "mirrored-node-feature-discovery"
-          )
-          for REPO in "${REPOSITORIES[@]}"; do
-            echo "Syncing repository: $REPO"
-            docker run --pull always --rm --privileged --network host --ipc host --entrypoint "" gpustack/gpustack:dev gpustack copy-images \
-              --repository $REPO \
-              --max-retries 3 \
-              --max-workers 2 \
-              --dest ${{ vars.DOCKER_MIRROR_REGISTRY }} \
-              --dest-user ${{ secrets.DOCKER_MIRROR_USER }} \
-              --dest-passwd ${{ secrets.DOCKER_MIRROR_PASSWORD }}
-          done
+          docker run --pull always --rm --privileged --network host --ipc host --entrypoint "" gpustack/gpustack:dev gpustack copy-images \
+            --no-repository runner gpustack \
+            --max-retries 3 \
+            --max-workers 2 \
+            --dest ${{ vars.DOCKER_MIRROR_REGISTRY }} \
+            --dest-user ${{ secrets.DOCKER_MIRROR_USER }} \
+            --dest-passwd ${{ secrets.DOCKER_MIRROR_PASSWORD }}
 
   sync-runner:
     runs-on: ubuntu-22.04
