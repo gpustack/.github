@@ -1,0 +1,104 @@
+name: Sync GPUStack Images
+
+on:
+  schedule:
+    - cron: "25 18 * * 0"
+  workflow_dispatch:
+    inputs:
+      dev:
+        description: "Whether to sync dev images instead of release images (default: false)"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  sync-images:
+    name: Compare and Sync Images
+    runs-on: ubuntu-latest
+    steps:
+      - name: 🏷️ Fetch Latest Tags
+        id: get_tags
+        run: |
+          # Fetch the latest two release tags from the repository
+          TAGS=$(curl -s -H "Authorization: Bearer ${{ github.token }}" "https://api.github.com/repos/gpustack/gpustack/releases?page=1&per_page=2" | grep '"tag_name":' | awk -F'"' '{print $4}')
+          LATEST_TAG=$(echo "$TAGS" | head -n 1)
+          SECOND_LATEST_TAG=$(echo "$TAGS" | sed -n '2p')
+          
+          if [[ "${{ inputs.dev }}" == 'true' || "${{ github.event_name }}" == 'schedule' ]]; then
+            SECOND_LATEST_TAG=$LATEST_TAG
+            LATEST_TAG=dev
+          fi
+          
+          echo "🚀 Latest tag: $LATEST_TAG"
+          echo "⏮️ Second latest tag: $SECOND_LATEST_TAG"
+          
+          echo "LATEST_TAG=$LATEST_TAG" >> "$GITHUB_ENV"
+          echo "SECOND_LATEST_TAG=$SECOND_LATEST_TAG" >> "$GITHUB_ENV"
+
+      - name: 🔍 Determine Images to Sync
+        id: get_images
+        run: |
+          IMAGES_TO_SYNC=$(grep -Fvf \
+            <(docker run -q --rm --entrypoint gpustack gpustack/gpustack:"$SECOND_LATEST_TAG" list-images) \
+            <(docker run -q --rm --entrypoint gpustack gpustack/gpustack:"$LATEST_TAG" list-images) | \
+            uniq || true)
+          
+          if [ -z "$IMAGES_TO_SYNC" ]; then
+            echo "✅ No new images found for synchronization."
+            echo "HAS_NEW_IMAGES=false" >> "$GITHUB_ENV"
+          else
+            echo "📦 Images identified for synchronization:"
+            echo "$IMAGES_TO_SYNC"
+          
+            echo "HAS_NEW_IMAGES=true" >> "$GITHUB_ENV"
+          
+            {
+              echo "IMAGES_TO_SYNC<<EOF"
+              echo "$IMAGES_TO_SYNC"
+              echo "EOF"
+            } >> "$GITHUB_ENV"
+          
+            # Initialize the Job Summary header
+            echo "### 🔄 Image Synchronization Report" >> "$GITHUB_STEP_SUMMARY"
+            echo "The following images were identified and synced:" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: 🔑 Login to Docker Hub (Improve API Limits)
+        if: env.HAS_NEW_IMAGES == 'true'
+        run: |
+          echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USER }}" docker.io --password-stdin
+
+      - name: 🔄 Sync to Quay.io
+        if: env.HAS_NEW_IMAGES == 'true'
+        run: |
+          echo "${{ secrets.DOCKER_QUAY_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_QUAY_USER }}" quay.io --password-stdin
+          
+          echo "#### 🟢 Quay.io" >> "$GITHUB_STEP_SUMMARY"
+          
+          echo "$IMAGES_TO_SYNC" | while read -r image; do
+            if [ -z "$image" ]; then continue; fi
+            echo "➡️ Syncing: $image"
+            skopeo copy --all --retry-times 3 "docker://${image}" "docker://quay.io/${image}" 
+          
+            # Append success status to Job Summary
+            echo "- ✅ \`$image\`" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: 🔄 Sync to SWR
+        if: env.HAS_NEW_IMAGES == 'true'
+        run: |
+          echo "${{ secrets.DOCKER_SWR_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_SWR_USER }}" "${{ secrets.DOCKER_SWR_REGISTRY }}" --password-stdin
+          
+          echo "#### 🔵 SWR" >> "$GITHUB_STEP_SUMMARY"
+          
+          echo "$IMAGES_TO_SYNC" | while read -r image; do
+            if [ -z "$image" ]; then continue; fi
+            echo "➡️ Syncing: $image"
+            skopeo copy --all --retry-times 3 "docker://${image}" "docker://${{ secrets.DOCKER_SWR_REGISTRY }}/${image}"
+          
+            echo "- ✅ \`$image\`" >> "$GITHUB_STEP_SUMMARY"
+          done
