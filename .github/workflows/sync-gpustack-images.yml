@@ -13,6 +13,11 @@ on:
         required: false
         default: false
         type: boolean
+      docker_login:
+        description: "Log in to Docker Hub to raise the pull rate limit (default: false)"
+        required: false
+        default: false
+        type: boolean
       full_sync:
         description: "Sync all images of the target tag instead of only the diff (default: false)"
         required: false
@@ -97,7 +102,7 @@ jobs:
           fi
 
       - name: 🔑 Login to Docker Hub (Improve API Limits)
-        if: env.HAS_NEW_IMAGES == 'true'
+        if: env.HAS_NEW_IMAGES == 'true' && inputs.docker_login == 'true'
         run: |
           # Log in to Docker Hub to raise the pull rate limit
           echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USER }}" docker.io --password-stdin
