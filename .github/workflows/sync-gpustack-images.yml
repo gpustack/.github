@@ -1,8 +1,11 @@
-name: Sync GPUStack Images
+name: sync-gpustack-images
 
 on:
   schedule:
+    # Weekly: sync new dev images (diff against the latest release)
     - cron: "25 18 * * 0"
+    # Every 4 hours: sync only gpustack/gpustack:dev
+    - cron: "45 */4 * * *"
   workflow_dispatch:
     inputs:
       dev:
@@ -10,6 +13,16 @@ on:
         required: false
         default: false
         type: boolean
+      full_sync:
+        description: "Sync all images of the target tag instead of only the diff (default: false)"
+        required: false
+        default: false
+        type: boolean
+      force_sync:
+        description: "Comma-separated images to force sync, e.g. gpustack:dev,mirrored-node-feature-discovery:v0.18.3 (gpustack/ namespace is prepended automatically)"
+        required: false
+        default: ""
+        type: string
 
 concurrency:
   group: ${{ github.workflow }}
@@ -42,11 +55,29 @@ jobs:
       - name: 🔍 Determine Images to Sync
         id: get_images
         run: |
-          IMAGES_TO_SYNC=$(grep -Fvf \
-            <(docker run -q --rm --entrypoint gpustack gpustack/gpustack:"$SECOND_LATEST_TAG" list-images) \
-            <(docker run -q --rm --entrypoint gpustack gpustack/gpustack:"$LATEST_TAG" list-images) | \
-            uniq || true)
-          
+          if [[ "${{ github.event_name }}" == 'schedule' && "${{ github.event.schedule }}" == '45 */4 * * *' ]]; then
+            # Every-4-hours schedule: only sync gpustack/gpustack:dev
+            IMAGES_TO_SYNC="gpustack/gpustack:dev"
+          elif [[ "${{ inputs.full_sync }}" == 'true' ]]; then
+            # Full sync: all images of the target tag
+            IMAGES_TO_SYNC=$(docker run -q --rm --entrypoint gpustack gpustack/gpustack:"$LATEST_TAG" list-images | uniq || true)
+          else
+            # Default: diff between the two tags
+            IMAGES_TO_SYNC=$(grep -Fvf \
+              <(docker run -q --rm --entrypoint gpustack gpustack/gpustack:"$SECOND_LATEST_TAG" list-images) \
+              <(docker run -q --rm --entrypoint gpustack gpustack/gpustack:"$LATEST_TAG" list-images) | \
+              uniq || true)
+          fi
+
+          # Append force-sync images (comma-separated name:tag, gpustack/ namespace prepended)
+          if [ -n "${{ inputs.force_sync }}" ]; then
+            FORCE_IMAGES=$(echo "${{ inputs.force_sync }}" | tr ',' '\n' | \
+              sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | sed '/^$/d' | sed 's#^#gpustack/#')
+            echo "🔧 Force-sync images requested:"
+            echo "$FORCE_IMAGES"
+            IMAGES_TO_SYNC=$(printf '%s\n%s\n' "$IMAGES_TO_SYNC" "$FORCE_IMAGES" | sed '/^$/d' | awk '!seen[$0]++')
+          fi
+
           if [ -z "$IMAGES_TO_SYNC" ]; then
             echo "✅ No new images found for synchronization."
             echo "HAS_NEW_IMAGES=false" >> "$GITHUB_ENV"

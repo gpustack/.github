@@ -1,4 +1,4 @@
-name: sync-docker-images
+name: sync-any-images
 
 permissions:
   contents: read
