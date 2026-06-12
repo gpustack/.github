@@ -55,6 +55,7 @@ jobs:
       - name: 🔍 Determine Images to Sync
         id: get_images
         run: |
+          # Build the list of images to sync based on the trigger and inputs
           if [[ "${{ github.event_name }}" == 'schedule' && "${{ github.event.schedule }}" == '45 */4 * * *' ]]; then
             # Every-4-hours schedule: only sync gpustack/gpustack:dev
             IMAGES_TO_SYNC="gpustack/gpustack:dev"
@@ -98,11 +99,13 @@ jobs:
       - name: 🔑 Login to Docker Hub (Improve API Limits)
         if: env.HAS_NEW_IMAGES == 'true'
         run: |
+          # Log in to Docker Hub to raise the pull rate limit
           echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USER }}" docker.io --password-stdin
 
       - name: 🔄 Sync to Quay.io
         if: env.HAS_NEW_IMAGES == 'true'
         run: |
+          # Sync each identified image to Quay.io
           echo "${{ secrets.DOCKER_QUAY_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_QUAY_USER }}" quay.io --password-stdin
           
           echo "#### 🟢 Quay.io" >> "$GITHUB_STEP_SUMMARY"
@@ -119,6 +122,7 @@ jobs:
       - name: 🔄 Sync to SWR
         if: env.HAS_NEW_IMAGES == 'true'
         run: |
+          # Sync each identified image to SWR
           echo "${{ secrets.DOCKER_SWR_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_SWR_USER }}" "${{ secrets.DOCKER_SWR_REGISTRY }}" --password-stdin
           
           echo "#### 🔵 SWR" >> "$GITHUB_STEP_SUMMARY"
