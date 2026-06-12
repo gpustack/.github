@@ -58,6 +58,12 @@ jobs:
           if [[ "${{ github.event_name }}" == 'schedule' && "${{ github.event.schedule }}" == '45 */4 * * *' ]]; then
             # Every-4-hours schedule: only sync gpustack/gpustack:dev
             IMAGES_TO_SYNC="gpustack/gpustack:dev"
+          elif [ -n "${{ inputs.force_sync }}" ]; then
+            # Force sync: only the specified images (comma-separated name:tag, gpustack/ namespace prepended)
+            IMAGES_TO_SYNC=$(echo "${{ inputs.force_sync }}" | tr ',' '\n' | \
+              sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | sed '/^$/d' | sed 's#^#gpustack/#' | awk '!seen[$0]++')
+            echo "🔧 Force-sync images requested:"
+            echo "$IMAGES_TO_SYNC"
           elif [[ "${{ inputs.full_sync }}" == 'true' ]]; then
             # Full sync: all images of the target tag
             IMAGES_TO_SYNC=$(docker run -q --rm --entrypoint gpustack gpustack/gpustack:"$LATEST_TAG" list-images | uniq || true)
@@ -67,15 +73,6 @@ jobs:
               <(docker run -q --rm --entrypoint gpustack gpustack/gpustack:"$SECOND_LATEST_TAG" list-images) \
               <(docker run -q --rm --entrypoint gpustack gpustack/gpustack:"$LATEST_TAG" list-images) | \
               uniq || true)
-          fi
-
-          # Append force-sync images (comma-separated name:tag, gpustack/ namespace prepended)
-          if [ -n "${{ inputs.force_sync }}" ]; then
-            FORCE_IMAGES=$(echo "${{ inputs.force_sync }}" | tr ',' '\n' | \
-              sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | sed '/^$/d' | sed 's#^#gpustack/#')
-            echo "🔧 Force-sync images requested:"
-            echo "$FORCE_IMAGES"
-            IMAGES_TO_SYNC=$(printf '%s\n%s\n' "$IMAGES_TO_SYNC" "$FORCE_IMAGES" | sed '/^$/d' | awk '!seen[$0]++')
           fi
 
           if [ -z "$IMAGES_TO_SYNC" ]; then
