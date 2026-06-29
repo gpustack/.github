@@ -81,6 +81,13 @@ jobs:
               uniq || true)
           fi
 
+          # On release syncs (manual dispatch with dev=false), also sync gpustack/gpustack:latest.
+          # Schedules set LATEST_TAG=dev, so they are excluded; force_sync uses an explicit list.
+          if [[ "$LATEST_TAG" != 'dev' && -z "${{ inputs.force_sync }}" ]]; then
+            echo "🏷️ Release sync: including gpustack/gpustack:latest"
+            IMAGES_TO_SYNC=$(printf '%s\n' "$IMAGES_TO_SYNC" "gpustack/gpustack:latest" | sed '/^$/d' | awk '!seen[$0]++')
+          fi
+
           if [ -z "$IMAGES_TO_SYNC" ]; then
             echo "✅ No new images found for synchronization."
             echo "HAS_NEW_IMAGES=false" >> "$GITHUB_ENV"
