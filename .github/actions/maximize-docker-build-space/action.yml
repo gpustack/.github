@@ -94,11 +94,22 @@ runs:
         echo "Purging unnecessary images"
         sudo docker image prune --all --force
         
-        # github runners have an active swap file in /mnt/swapfile
-        # we want to reuse the temp disk, so first unmount swap and clean the temp disk
+        # github runners have an active swap file in /mnt/swapfile on images with a temp
+        # disk, and in /swapfile on the root fs on current images
         echo "Removing swap"
         sudo swapoff -a
-        sudo rm -f /mnt/swapfile
+        sudo rm -f /mnt/swapfile /swapfile
+        
+        # The temp disk at /mnt exists only on runner SKUs with a local resource disk; on
+        # current standard runners /mnt is just a directory on the root fs. A loop PV placed
+        # there would draw on the SAME filesystem the root PV just shrank to root-reserve-mb,
+        # leaving the root with only temp-reserve-mb free — and the runner dies on the next
+        # write, before it can upload any job log. Contribute /mnt only when it is a
+        # filesystem of its own.
+        TMP_SEPARATE_FS=false
+        if mountpoint -q /mnt && [[ "$(stat -c '%d' /mnt)" != "$(stat -c '%d' /)" ]]; then
+          TMP_SEPARATE_FS=true
+        fi
         
         echo "Creating LVM PV on root fs"
         # create loop pv image on root fs
@@ -112,21 +123,27 @@ runs:
         sudo pvcreate -f "${ROOT_LOOP_DEV}"
         echo "  Reserve ${{ inputs.root-reserve-mb }} Mib, Contrib $(expr $ROOT_LVM_SIZE_KB / 1024) Mib"
 
-        # create pv on temp disk
-        echo "Creating LVM PV on temp fs"
-        TMP_PV_LOOP_PATH="/mnt/pv.img"
-        TMP_RESERVE_KB=$(expr ${{ inputs.temp-reserve-mb }} \* 1024)
-        TMP_FREE_KB=$(df --block-size=1024 --output=avail /mnt | tail -1)
-        TMP_LVM_SIZE_KB=$(expr $TMP_FREE_KB - $TMP_RESERVE_KB)
-        TMP_LVM_SIZE_BYTES=$(expr $TMP_LVM_SIZE_KB \* 1024)
-        sudo touch "${TMP_PV_LOOP_PATH}" && sudo fallocate -z -l "${TMP_LVM_SIZE_BYTES}" "${TMP_PV_LOOP_PATH}"
-        export TMP_LOOP_DEV=$(sudo losetup --find --show "${TMP_PV_LOOP_PATH}")
-        sudo pvcreate -f "${TMP_LOOP_DEV}"
-        echo "  Reserve ${{ inputs.temp-reserve-mb }} Mib, Contrib $(expr $TMP_LVM_SIZE_KB / 1024) Mib"
+        PV_DEVS=("${ROOT_LOOP_DEV}")
+        if [[ "${TMP_SEPARATE_FS}" == "true" ]]; then
+          # create pv on temp disk
+          echo "Creating LVM PV on temp fs"
+          TMP_PV_LOOP_PATH="/mnt/pv.img"
+          TMP_RESERVE_KB=$(expr ${{ inputs.temp-reserve-mb }} \* 1024)
+          TMP_FREE_KB=$(df --block-size=1024 --output=avail /mnt | tail -1)
+          TMP_LVM_SIZE_KB=$(expr $TMP_FREE_KB - $TMP_RESERVE_KB)
+          TMP_LVM_SIZE_BYTES=$(expr $TMP_LVM_SIZE_KB \* 1024)
+          sudo touch "${TMP_PV_LOOP_PATH}" && sudo fallocate -z -l "${TMP_LVM_SIZE_BYTES}" "${TMP_PV_LOOP_PATH}"
+          export TMP_LOOP_DEV=$(sudo losetup --find --show "${TMP_PV_LOOP_PATH}")
+          sudo pvcreate -f "${TMP_LOOP_DEV}"
+          PV_DEVS+=("${TMP_LOOP_DEV}")
+          echo "  Reserve ${{ inputs.temp-reserve-mb }} Mib, Contrib $(expr $TMP_LVM_SIZE_KB / 1024) Mib"
+        else
+          echo "Skipping LVM PV on temp fs: /mnt is not a separate filesystem"
+        fi
         
         VG_NAME=buildvg
         # create volume group from these pvs
-        sudo vgcreate "${VG_NAME}" "${TMP_LOOP_DEV}" "${ROOT_LOOP_DEV}"
+        sudo vgcreate "${VG_NAME}" "${PV_DEVS[@]}"
 
         echo "Recreating swap"
         # create and activate swap
