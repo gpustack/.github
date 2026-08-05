@@ -28,6 +28,11 @@ on:
         required: false
         default: ""
         type: string
+      diff_depth:
+        description: "How many releases to go back for the diff base, e.g. 2 skips a prerelease and compares against the release before it (default: 1)"
+        required: false
+        default: "1"
+        type: string
 
 concurrency:
   group: ${{ github.workflow }}
@@ -41,19 +46,36 @@ jobs:
       - name: 🏷️ Fetch Latest Tags
         id: get_tags
         run: |
-          # Fetch the latest two release tags from the repository
-          TAGS=$(curl -s -H "Authorization: Bearer ${{ github.token }}" "https://api.github.com/repos/gpustack/gpustack/releases?page=1&per_page=2" | grep '"tag_name":' | awk -F'"' '{print $4}')
+          # How many releases to go back for the diff base. 1 (the default) compares against
+          # the immediately preceding release; a larger value skips that many releases, which
+          # is useful when the preceding ones are prereleases whose images were never synced.
+          DEPTH="${{ inputs.diff_depth }}"
+          DEPTH="${DEPTH:-1}"
+          if ! [[ "$DEPTH" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::diff_depth must be a positive integer, got '$DEPTH'"
+            exit 1
+          fi
+
+          # Fetch the most recent release tags from the repository
+          TAGS=$(curl -s -H "Authorization: Bearer ${{ github.token }}" "https://api.github.com/repos/gpustack/gpustack/releases?page=1&per_page=$((DEPTH + 1))" | grep '"tag_name":' | awk -F'"' '{print $4}')
           LATEST_TAG=$(echo "$TAGS" | head -n 1)
-          SECOND_LATEST_TAG=$(echo "$TAGS" | sed -n '2p')
-          
+          SECOND_LATEST_TAG=$(echo "$TAGS" | sed -n "$((DEPTH + 1))p")
+
           if [[ "${{ inputs.dev }}" == 'true' || "${{ github.event_name }}" == 'schedule' ]]; then
-            SECOND_LATEST_TAG=$LATEST_TAG
+            # dev is not a release, so the base is one release closer to the top of the list
+            SECOND_LATEST_TAG=$(echo "$TAGS" | sed -n "${DEPTH}p")
             LATEST_TAG=dev
           fi
-          
+
+          # Only the diff path needs a base tag; full_sync and force_sync ignore it
+          if [[ -z "$SECOND_LATEST_TAG" && "${{ inputs.full_sync }}" != 'true' && -z "${{ inputs.force_sync }}" ]]; then
+            echo "::error::No release found $DEPTH release(s) back to diff against"
+            exit 1
+          fi
+
           echo "🚀 Latest tag: $LATEST_TAG"
-          echo "⏮️ Second latest tag: $SECOND_LATEST_TAG"
-          
+          echo "⏮️ Diff base tag ($DEPTH release(s) back): $SECOND_LATEST_TAG"
+
           echo "LATEST_TAG=$LATEST_TAG" >> "$GITHUB_ENV"
           echo "SECOND_LATEST_TAG=$SECOND_LATEST_TAG" >> "$GITHUB_ENV"
 
@@ -105,6 +127,7 @@ jobs:
           
             # Initialize the Job Summary header
             echo "### 🔄 Image Synchronization Report" >> "$GITHUB_STEP_SUMMARY"
+            echo "Target tag: \`$LATEST_TAG\` · Diff base tag: \`$SECOND_LATEST_TAG\`" >> "$GITHUB_STEP_SUMMARY"
             echo "The following images were identified and synced:" >> "$GITHUB_STEP_SUMMARY"
           fi
 
