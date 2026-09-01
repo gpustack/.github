@@ -1,0 +1,147 @@
+# This reusable workflow runs AI code review on a pull request: it resolves the PR refs
+# (for comment triggers), mints a GitHub App installation token, and invokes the upstream
+# OpenCodeReview composite action, which reviews the base..head diff with an LLM and posts
+# inline + summary comments under the App's identity. Review comments are the only
+# deliverable — SARIF / Code Scanning upload was evaluated and deliberately dropped.
+#
+# It exists so every gpustack repo gets the same review pipeline: the trigger gating and
+# the per-PR concurrency group stay with the caller (they bind to the caller's events),
+# while everything from token minting to comment posting is fixed here once. A fix to the
+# review pipeline applies to every adopting repo at once.
+#
+# The caller owns: its own "on:" triggers (pull_request_target + issue_comment), the
+# job-level "if:" gating, the concurrency group, and the secrets mapping. This workflow
+# owns the review itself. Align with upstream:
+# https://github.com/alibaba/open-code-review/blob/main/examples/github_actions/ocr-review.yml
+#
+# Required GitHub App permissions (configured on the App, not here): Pull requests:
+# Read and write, Contents: Read-only, Metadata: Read-only. The installation is resolved
+# from the calling repository, so the App must be installed on each adopting repo.
+# Expected org secrets:
+#   CI_GPUSTACK_CODEREVIEW_APP_ID           -> secret app-id
+#   CI_GPUSTACK_CODEREVIEW_APP_PRIVATE_KEY  -> secret app-private-key
+#   CI_GPUSTACK_CODEREVIEW_Z_AI_APIKEY      -> secret llm-auth-token
+# (CI_GPUSTACK_CODEREVIEW_APP_INSTALLATION_ID exists but is intentionally unused:
+# create-github-app-token has no installation-id input and resolves the installation
+# from the caller repository.)
+#
+# Defaults target Zhipu's OpenAI-compatible GLM endpoint; callers override via inputs.
+
+name: Code Review
+
+permissions:
+  contents: read
+  pull-requests: write
+
+defaults:
+  run:
+    shell: bash
+
+on:
+  workflow_call:
+    inputs:
+      llm-url:
+        description: 'LLM API endpoint. A base URL is fine: OCR appends /chat/completions.'
+        required: false
+        type: string
+        default: "https://open.bigmodel.cn/api/paas/v4"
+      llm-model:
+        description: 'LLM model name.'
+        required: false
+        type: string
+        default: "glm-5.3-flash"
+      llm-use-anthropic:
+        description: '"true" selects the Anthropic protocol; anything else selects OpenAI-compatible.'
+        required: false
+        type: string
+        default: "false"
+      llm-thinking:
+        description: 'GLM thinking mode: "enabled" or "disabled". Mapped to the llm.extra_body request field.'
+        required: false
+        type: string
+        default: "enabled"
+      language:
+        description: 'Review output language (e.g. English, Chinese).'
+        required: false
+        type: string
+        default: "English"
+      ocr-version:
+        description: 'npm version spec for @alibaba-group/open-code-review (v1.9.6 or newer).'
+        required: false
+        type: string
+        default: "latest"
+      review-concurrency:
+        description: 'Value passed to `ocr review --concurrency`; empty keeps the OCR default.'
+        required: false
+        type: string
+        default: ""
+    secrets:
+      llm-auth-token:
+        description: 'LLM API auth token.'
+        required: true
+      app-id:
+        description: 'GitHub App ID used to author review comments.'
+        required: true
+      app-private-key:
+        description: 'GitHub App private key (the full PEM, including BEGIN/END lines).'
+        required: true
+
+jobs:
+  review:
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get PR Context
+        id: pr-context
+        if: github.event_name == 'issue_comment'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // For issue_comment events, resolve PR base/head so the action
+            // can review the right diff (issue_comment has no top-level
+            // pull_request payload fields).
+            const prNumber = context.issue.number;
+            const { data: pullRequest } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber
+            });
+            core.setOutput('base_ref', pullRequest.base.ref);
+            core.setOutput('head_sha', pullRequest.head.sha);
+      - name: Get GitHub App Token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.app-id }}
+          private-key: ${{ secrets.app-private-key }}
+      - name: Resolve Thinking Mode
+        id: thinking
+        env:
+          INPUT_LLM_THINKING: ${{ inputs.llm-thinking }}
+        run: |
+          # The upstream action's llm_extra_body default disables thinking; here the
+          # llm-thinking input decides, and any value other than "disabled" means
+          # enabled. Building the JSON in a step (not inline in the expression) keeps
+          # the colons out of YAML flow-scalar parsing.
+          TYPE="enabled"
+          if [[ "${INPUT_LLM_THINKING}" == "disabled" ]]; then
+            TYPE="disabled"
+          fi
+          printf 'extra_body={"thinking": {"type": "%s"}}\n' "${TYPE}" >> "$GITHUB_OUTPUT"
+          echo "DEBUG: llm-thinking=${TYPE}"
+      - name: Run OpenCodeReview
+        uses: alibaba/open-code-review@main
+        with:
+          llm_url: ${{ inputs.llm-url }}
+          llm_auth_token: ${{ secrets.llm-auth-token }}
+          llm_model: ${{ inputs.llm-model }}
+          llm_use_anthropic: ${{ inputs.llm-use-anthropic }}
+          llm_extra_body: ${{ steps.thinking.outputs.extra_body }}
+          language: ${{ inputs.language }}
+          ocr_version: ${{ inputs.ocr-version }}
+          review_concurrency: ${{ inputs.review-concurrency }}
+          github_token: ${{ steps.app-token.outputs.token }}
+          # For issue_comment triggers, pass the resolved refs; for
+          # pull_request_target the action resolves them from the event.
+          base_ref: ${{ steps.pr-context.outputs.base_ref }}
+          head_sha: ${{ steps.pr-context.outputs.head_sha }}
