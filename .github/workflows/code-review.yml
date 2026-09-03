@@ -1,5 +1,5 @@
 # This reusable workflow runs AI code review on a pull request: it resolves the PR refs
-# (for comment triggers), mints a GitHub App installation token, and invokes the upstream
+# (for comment triggers), mints a GitHub App installation token, and invokes the
 # OpenCodeReview composite action, which reviews the base..head diff with an LLM and posts
 # inline + summary comments under the App's identity. Review comments are the only
 # deliverable — SARIF / Code Scanning upload was evaluated and deliberately dropped.
@@ -17,15 +17,18 @@
 # Required GitHub App permissions (configured on the App, not here): Pull requests:
 # Read and write, Contents: Read-only, Metadata: Read-only. The installation is resolved
 # from the calling repository, so the App must be installed on each adopting repo.
-# Expected org secrets:
-#   CI_GPUSTACK_CODEREVIEW_APP_ID           -> secret app-id
-#   CI_GPUSTACK_CODEREVIEW_APP_PRIVATE_KEY  -> secret app-private-key
-#   CI_GPUSTACK_CODEREVIEW_Z_AI_APIKEY      -> secret llm-auth-token
-# (CI_GPUSTACK_CODEREVIEW_APP_INSTALLATION_ID exists but is intentionally unused:
-# create-github-app-token has no installation-id input and resolves the installation
-# from the caller repository.)
+# (create-github-app-token has no installation-id input; it resolves the installation
+# from the caller repository, so no installation id is ever passed.)
 #
-# Defaults target Zhipu's OpenAI-compatible GLM endpoint; callers override via inputs.
+# This workflow is deliberately model-agnostic: which LLM endpoint, model, and
+# credentials a review runs with is the caller's business — it passes them via the
+# llm-* inputs and the secrets mapping. Nothing here names a provider.
+#
+# MCP servers for the review are seeded here as well (Configure MCP Servers step):
+# DeepWiki always (remote, auth-free), Serena by default (opt out via
+# enable-serena: "false"). The MCP config is written by this workflow only and
+# never read from PR-controlled files, keeping the pull_request_target safety
+# posture intact.
 
 name: Code Review
 
@@ -42,24 +45,32 @@ on:
     inputs:
       llm-url:
         description: 'LLM API endpoint. A base URL is fine: OCR appends /chat/completions.'
-        required: false
+        required: true
         type: string
-        default: "https://open.bigmodel.cn/api/paas/v4"
       llm-model:
         description: 'LLM model name.'
-        required: false
+        required: true
         type: string
-        default: "glm-5.3-flash"
       llm-use-anthropic:
         description: '"true" selects the Anthropic protocol; anything else selects OpenAI-compatible.'
         required: false
         type: string
         default: "false"
       llm-thinking:
-        description: 'GLM thinking mode: "enabled" or "disabled". Mapped to the llm.extra_body request field.'
+        description: 'Thinking mode: "enabled" or "disabled". Mapped to the llm.extra_body request field ({"thinking": {"type": ...}}, a GLM/Qwen-class provider field).'
         required: false
         type: string
-        default: "enabled"
+        default: "disabled"
+      llm-reasoning-effort:
+        description: 'Reasoning depth for thinking-enabled models (e.g. GLM-5.3, where thinking is always on): "minimal", "low", "medium", "high", or "max" (union of the OpenAI and GLM vocabularies). Forwarded to the action''s llm_reasoning_effort input, which merges it into llm.extra_body as reasoning_effort — an explicit reasoning_effort key in the extra_body wins. Empty = send nothing (provider default).'
+        required: false
+        type: string
+        default: ""
+      stream-progress:
+        description: '"true" streams live [ocr] review progress into the workflow log (human audience on stderr); "false" stays silent until the run finishes. Forwarded to the action''s stream_progress input.'
+        required: false
+        type: string
+        default: "true"
       language:
         description: 'Review output language (e.g. English, Chinese).'
         required: false
@@ -75,6 +86,50 @@ on:
         required: false
         type: string
         default: ""
+      effort:
+        description: 'Review effort preset: "low", "medium", or "high" (1/2/3 review rounds per file). Seeded into ~/.opencodereview/config.json before the action runs; the pinned thxCode fork also exposes a native effort input, but seeding keeps working if the pin switches back to upstream. Empty falls back to "medium", which is also the OCR default.'
+        required: false
+        type: string
+        default: "medium"
+      route-severity-below:
+        description: 'Severity threshold whose at-or-below findings are routed from inline comments to the PR summary (never dropped): "critical", "high", "medium", or "low". "low" keeps only medium-and-above findings inline. Empty disables severity routing.'
+        required: false
+        type: string
+        default: "low"
+      route-categories:
+        description: 'Comma-separated categories routed from inline comments to the PR summary (never dropped), case-insensitive: bug, security, performance, maintainability, test, style, documentation, other. Unknown tokens are ignored. Combines with route-severity-below on either condition. Empty disables category routing.'
+        required: false
+        type: string
+        default: ""
+      # Total token budget (input+output) for the whole review, forwarded to the
+      # action's max_tokens_budget input; dispatch stops once exceeded, partial
+      # results still publish, exit 0. Empty = unlimited.
+      max-tokens-budget:
+        description: 'Total token budget (input+output) for the whole review; dispatch stops once exceeded, partial results still publish, exit 0. Empty = unlimited.'
+        required: false
+        type: string
+        default: "10000000"
+      # Timeout layering, outermost first: the job-level timeout-minutes is the
+      # hard ceiling; review-task-timeout bounds each file's review inside it;
+      # llm-timeout bounds a single LLM request inside a file's review. The
+      # llm-timeout default is 60m per request: slow non-flash models on large
+      # files can run a single request for many minutes, and the upstream 300s
+      # default fails such requests outright.
+      llm-timeout:
+        description: 'Single LLM request timeout in seconds. Passed to the action as llm_timeout (env OCR_LLM_TIMEOUT).'
+        required: false
+        type: string
+        default: "3600"
+      review-task-timeout:
+        description: 'Per-file review task timeout in minutes (1-120). Passed to the action as review_task_timeout (`ocr review --timeout`).'
+        required: false
+        type: string
+        default: "15"
+      enable-serena:
+        description: '"false" skips the Serena MCP server (symbol navigation over the checked-out PR code). Language servers are auto-detected and set up by this workflow.'
+        required: false
+        type: string
+        default: "true"
     secrets:
       llm-auth-token:
         description: 'LLM API auth token.'
@@ -88,7 +143,9 @@ on:
 
 jobs:
   review:
-    timeout-minutes: 30
+    # Reviews on large diffs regularly run past 30 minutes
+    # (observed on gpustack-operator); give them room to finish.
+    timeout-minutes: 60
     runs-on: ubuntu-latest
     steps:
       - name: Get PR Context
@@ -119,18 +176,121 @@ jobs:
         env:
           INPUT_LLM_THINKING: ${{ inputs.llm-thinking }}
         run: |
-          # The upstream action's llm_extra_body default disables thinking; here the
-          # llm-thinking input decides, and any value other than "disabled" means
-          # enabled. Building the JSON in a step (not inline in the expression) keeps
-          # the colons out of YAML flow-scalar parsing.
-          TYPE="enabled"
-          if [[ "${INPUT_LLM_THINKING}" == "disabled" ]]; then
-            TYPE="disabled"
+          # The llm-thinking input decides the extra_body sent to the LLM; only an
+          # explicit "enabled" turns thinking on — an empty or misspelled value
+          # (e.g. an unset org variable) safely falls back to disabled. Building
+          # the JSON in a step (not inline in the expression) keeps the colons
+          # out of YAML flow-scalar parsing.
+          TYPE="disabled"
+          if [[ "${INPUT_LLM_THINKING}" == "enabled" ]]; then
+            TYPE="enabled"
           fi
           printf 'extra_body={"thinking": {"type": "%s"}}\n' "${TYPE}" >> "$GITHUB_OUTPUT"
           echo "DEBUG: llm-thinking=${TYPE}"
+      - name: Detect Serena Languages
+        id: serena-langs
+        if: inputs.enable-serena == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          # Serena self-provisions nearly every language server on first use
+          # (npm/uvx/GitHub-release downloads — node and uv are already ensured
+          # by the runner image and the setup-uv step). The one exception we
+          # install ourselves is Go's gopls, so detection only asks one
+          # question: is this a Go repository? It probes through the GitHub API
+          # because the caller's code is not on disk yet — the OCR action
+          # checks it out internally (a plain `find` would see an empty
+          # workspace). Caller-transparent: if another language ever needs a
+          # preinstalled LSP, add its marker here and its install step below.
+          LANGS=""
+          gh api "repos/${GITHUB_REPOSITORY}/contents/go.mod" --silent 2>/dev/null && LANGS="go"
+          echo "languages=${LANGS}" >> "$GITHUB_OUTPUT"
+          echo "DEBUG: serena-languages=${LANGS:-<none detected>}"
+      - name: Set up uv
+        if: inputs.enable-serena == 'true'
+        uses: astral-sh/setup-uv@v10.0.1
+        with:
+          enable-cache: true
+      - name: Install Serena
+        if: inputs.enable-serena == 'true'
+        run: |
+          # A wheel install (not uvx-from-source) keeps startup off the critical path.
+          uv tool install -p 3.13 serena-agent
+          echo "DEBUG: serena $(serena --version)"
+      - name: Set up Go
+        if: inputs.enable-serena == 'true' && contains(steps.serena-langs.outputs.languages, 'go')
+        uses: actions/setup-go@v7
+        with:
+          # gopls only needs a current toolchain to build; the reviewed module's
+          # own go directive (go.mod) is irrelevant here, and it is not on disk
+          # yet anyway (the OCR action checks the code out internally).
+          go-version: stable
+          # No go.sum is on disk at this point, so the module cache has nothing
+          # to key on; gopls's module download is simply paid per run.
+          cache: false
+      - name: Install gopls
+        if: inputs.enable-serena == 'true' && contains(steps.serena-langs.outputs.languages, 'go')
+        run: |
+          # gopls is not auto-downloaded by Serena; pin it for reproducibility.
+          go install golang.org/x/tools/gopls@v0.23.0
+          echo "DEBUG: $(gopls version)"
+      - name: Seed OCR Effort
+        env:
+          INPUT_EFFORT: ${{ inputs.effort }}
+        run: |
+          # The composite action never passes --effort to `ocr review`, but OCR
+          # falls back to the "effort" key in ~/.opencodereview/config.json when
+          # the flag is absent. Seed it here; `ocr config set` merges by key
+          # (load-modify-save), so the action's own llm.* writes leave it intact
+          # (the same mechanism the MCP seeding below relies on). An unset
+          # caller variable arrives as "" and falls back to the OCR default;
+          # a non-empty invalid value fails fast instead of being ignored.
+          EFFORT="${INPUT_EFFORT:-medium}"
+          case "${EFFORT}" in
+            low|medium|high) ;;
+            *) echo "::error::effort must be one of low, medium, high (got '${INPUT_EFFORT}')"; exit 1 ;;
+          esac
+          CONFIG_DIR="${HOME}/.opencodereview"
+          CONFIG_FILE="${CONFIG_DIR}/config.json"
+          mkdir -p "${CONFIG_DIR}"
+          [[ -f "${CONFIG_FILE}" ]] || echo '{}' > "${CONFIG_FILE}"
+          jq --arg effort "${EFFORT}" '.effort = $effort' \
+            "${CONFIG_FILE}" > "${CONFIG_FILE}.tmp"
+          mv "${CONFIG_FILE}.tmp" "${CONFIG_FILE}"
+          echo "DEBUG: seeded effort=${EFFORT}"
+      - name: Configure MCP Servers
+        env:
+          INPUT_ENABLE_SERENA: ${{ inputs.enable-serena }}
+        run: |
+          # OpenCodeReview reads MCP servers only from ~/.opencodereview/config.json
+          # at review startup; the composite action has no MCP input. OCR's
+          # `config set` merges by key (load-modify-save), so the mcp_servers seeded
+          # here survive the action's own llm.* writes (verified against OCR's
+          # config_cmd.go and exercised locally against the published CLI).
+          # DeepWiki is registered unconditionally: it is a remote server requiring
+          # no auth and no local install, so every review can ground claims about
+          # third-party dependencies against upstream docs for free.
+          CONFIG_DIR="${HOME}/.opencodereview"
+          CONFIG_FILE="${CONFIG_DIR}/config.json"
+          mkdir -p "${CONFIG_DIR}"
+          [[ -f "${CONFIG_FILE}" ]] || echo '{}' > "${CONFIG_FILE}"
+          jq '.mcp_servers.deepwiki = {"type": "remote", "url": "https://mcp.deepwiki.com/mcp"}' \
+            "${CONFIG_FILE}" > "${CONFIG_FILE}.tmp"
+          mv "${CONFIG_FILE}.tmp" "${CONFIG_FILE}"
+          if [[ "${INPUT_ENABLE_SERENA}" == "true" ]]; then
+            # Serena runs as a stdio subprocess with CI-safe flags: ide context,
+            # one-shot / no-onboarding / no-memories modes, no web dashboard.
+            # --project points at the workspace, which the OCR action's internal
+            # checkout populates before OCR spawns MCP clients. The absolute
+            # binary path keeps the entry independent of PATH resolution.
+            jq --arg cmd "${HOME}/.local/bin/serena" --arg proj "${GITHUB_WORKSPACE}" \
+              '.mcp_servers.serena = {command: $cmd, args: ["start-mcp-server", "--context", "ide", "--mode", "one-shot", "--mode", "no-onboarding", "--mode", "no-memories", "--enable-web-dashboard", "false", "--project", $proj]}' \
+              "${CONFIG_FILE}" > "${CONFIG_FILE}.tmp"
+            mv "${CONFIG_FILE}.tmp" "${CONFIG_FILE}"
+          fi
+          echo "DEBUG: seeded mcp_servers=$(jq -c '.mcp_servers' "${CONFIG_FILE}")"
       - name: Run OpenCodeReview
-        uses: alibaba/open-code-review@main
+        uses: thxCode/open-code-review@main
         with:
           llm_url: ${{ inputs.llm-url }}
           llm_auth_token: ${{ secrets.llm-auth-token }}
@@ -140,8 +300,83 @@ jobs:
           language: ${{ inputs.language }}
           ocr_version: ${{ inputs.ocr-version }}
           review_concurrency: ${{ inputs.review-concurrency }}
+          llm_timeout: ${{ inputs.llm-timeout }}
+          review_task_timeout: ${{ inputs.review-task-timeout }}
+          # Cap total token spend per review (input+output); on overflow
+          # dispatch stops, partial results are published, and the run exits 0.
+          max_tokens_budget: ${{ inputs.max-tokens-budget }}
+          # Reasoning depth for thinking-enabled models; merged into the request
+          # body as reasoning_effort. Empty = provider default.
+          llm_reasoning_effort: ${{ inputs.llm-reasoning-effort }}
+          # Stream live [ocr] progress into the workflow log (on by default
+          # here; the upstream action default is off).
+          stream_progress: ${{ inputs.stream-progress }}
+          # Keep inline comments to medium-and-above findings; low-severity
+          # findings land in the PR summary instead of inline threads.
+          route_severity_below: ${{ inputs.route-severity-below }}
+          # Category routing is off by default; list categories to route them
+          # to the summary (combines with the severity threshold on either).
+          route_categories: ${{ inputs.route-categories }}
+          # Dedup against already-posted bot comments and re-review only the
+          # range since the last recorded checkpoint (sticky summary defaults
+          # to true, satisfying checkpoint_range's prerequisite).
+          incremental: 'true'
+          checkpoint_range: 'true'
           github_token: ${{ steps.app-token.outputs.token }}
           # For issue_comment triggers, pass the resolved refs; for
           # pull_request_target the action resolves them from the event.
           base_ref: ${{ steps.pr-context.outputs.base_ref }}
           head_sha: ${{ steps.pr-context.outputs.head_sha }}
+      - name: Show OCR Session Log
+        # always(): the transcript matters most when the review itself failed
+        # or was cancelled, so replay it even then. Diagnostics only — this
+        # step must never fail the job.
+        if: always()
+        run: |
+          # The composite action runs `ocr review --audience agent`, which
+          # discards every progress line, so the step log above stays silent
+          # until the final result JSON. OCR still persists a full per-event
+          # transcript on every run to
+          # ~/.opencodereview/sessions/<repo>/<session-id>.jsonl (LLM
+          # requests/responses with token usage, tool calls, per-file
+          # outcomes). Replay the newest session here so the Actions log
+          # shows what the review actually did.
+          if ! command -v ocr >/dev/null 2>&1; then
+            echo "ocr CLI not on PATH (install step never ran?); skipping session replay"
+            exit 0
+          fi
+          SUMMARY="$(ocr session list --json --limit 1 2>/dev/null || true)"
+          SID="$(printf '%s' "${SUMMARY}" | jq -r '.[0].session_id // empty')"
+          FILE="$(printf '%s' "${SUMMARY}" | jq -r '.[0].file_path // empty')"
+          if [[ -z "${SID}" || ! -f "${FILE}" ]]; then
+            echo "no persisted OCR session found; nothing to replay"
+            exit 0
+          fi
+          echo "=== OCR session ${SID} ==="
+          ocr session show "${SID}" || true
+          echo "=== OCR session events (from ${FILE}) ==="
+          # One line per event; llm_request message bodies are deliberately
+          # omitted (they are the full prompts — see the uploaded artifact).
+          jq -r '"\(.timestamp[11:19]) [\(.type)] \(.filePath // "-")" +
+            (if .type == "llm_response" then
+              " model=\(.model) in=\(.usage.prompt_tokens) out=\(.usage.completion_tokens) cache_read=\(.usage.cache_read_tokens) \(.duration_ms)ms"
+            elif .type == "tool_call" then
+              " \(.tool_name) ok=\(.ok) \(.duration_ms)ms"
+            elif .type == "llm_error" then
+              " req=\(.request_no) \(.duration_ms)ms error=\(.error)"
+            elif .type == "llm_request" then
+              " task=\(.taskType) req=\(.request_no)"
+            else "" end)' "${FILE}" || true
+      - name: Resolve OCR Session Transcript Path
+        if: always()
+        # $HOME is a runner env var, not part of the `env` expression context —
+        # resolve the path in shell first (`${{ env.HOME }}` would expand empty).
+        run: echo "OCR_SESSIONS_DIR=${HOME}/.opencodereview/sessions" >> "$GITHUB_ENV"
+      - name: Upload OCR Session Transcript
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ocr-session-${{ github.run_id }}
+          path: ${{ env.OCR_SESSIONS_DIR }}
+          if-no-files-found: ignore
+          retention-days: 1
