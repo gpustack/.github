@@ -61,6 +61,21 @@ on:
         required: false
         type: string
         default: "disabled"
+      llm-thinking-clear:
+        description: '"true" lets the provider clear prior-turn reasoning from the context (GLM-class default); "false" keeps it. Mapped to thinking.clear_thinking in llm.extra_body.'
+        required: false
+        type: string
+        default: "true"
+      llm-temperature:
+        description: 'Sampling temperature sent as the temperature request field; pins the profile so reviews stay reproducible across provider default changes.'
+        required: false
+        type: string
+        default: "0.4"
+      llm-top-p:
+        description: 'Nucleus-sampling threshold sent as the top_p request field.'
+        required: false
+        type: string
+        default: "0.9"
       llm-reasoning-effort:
         description: 'Reasoning depth for thinking-enabled models (e.g. GLM-5.3, where thinking is always on): "minimal", "low", "medium", "high", or "max" (union of the OpenAI and GLM vocabularies). Forwarded to the action''s llm_reasoning_effort input, which merges it into llm.extra_body as reasoning_effort — an explicit reasoning_effort key in the extra_body wins. Empty = send nothing (provider default).'
         required: false
@@ -175,18 +190,30 @@ jobs:
         id: thinking
         env:
           INPUT_LLM_THINKING: ${{ inputs.llm-thinking }}
+          INPUT_LLM_THINKING_CLEAR: ${{ inputs.llm-thinking-clear }}
+          INPUT_LLM_TEMPERATURE: ${{ inputs.llm-temperature }}
+          INPUT_LLM_TOP_P: ${{ inputs.llm-top-p }}
         run: |
           # The llm-thinking input decides the extra_body sent to the LLM; only an
           # explicit "enabled" turns thinking on — an empty or misspelled value
           # (e.g. an unset org variable) safely falls back to disabled. Building
           # the JSON in a step (not inline in the expression) keeps the colons
-          # out of YAML flow-scalar parsing.
+          # out of YAML flow-scalar parsing. clear_thinking, temperature and
+          # top_p ride the same body (see the inputs); temperature/top_p default
+          # to 0.4/0.9 so reviews stay reproducible across provider default
+          # changes. temperature/top_p pass through unquoted — the caller owns
+          # supplying valid JSON numbers.
           TYPE="disabled"
           if [[ "${INPUT_LLM_THINKING}" == "enabled" ]]; then
             TYPE="enabled"
           fi
-          printf 'extra_body={"thinking": {"type": "%s"}}\n' "${TYPE}" >> "$GITHUB_OUTPUT"
-          echo "DEBUG: llm-thinking=${TYPE}"
+          CLEAR="false"
+          if [[ "${INPUT_LLM_THINKING_CLEAR}" == "true" ]]; then
+            CLEAR="true"
+          fi
+          printf 'extra_body={"thinking": {"type": "%s", "clear_thinking": %s}, "temperature": %s, "top_p": %s}\n' \
+            "${TYPE}" "${CLEAR}" "${INPUT_LLM_TEMPERATURE}" "${INPUT_LLM_TOP_P}" >> "$GITHUB_OUTPUT"
+          echo "DEBUG: llm-thinking=${TYPE} clear_thinking=${CLEAR} temperature=${INPUT_LLM_TEMPERATURE} top_p=${INPUT_LLM_TOP_P}"
       - name: Detect Serena Languages
         id: serena-langs
         if: inputs.enable-serena == 'true'
