@@ -65,7 +65,7 @@ on:
         description: '"true" lets the provider clear prior-turn reasoning from the context (GLM-class default); "false" keeps it. Mapped to thinking.clear_thinking in llm.extra_body.'
         required: false
         type: string
-        default: "true"
+        default: "false"
       llm-temperature:
         description: 'Sampling temperature sent as the temperature request field; pins the profile so reviews stay reproducible across provider default changes.'
         required: false
