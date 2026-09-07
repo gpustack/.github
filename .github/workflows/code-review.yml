@@ -102,7 +102,7 @@ on:
         type: string
         default: ""
       effort:
-        description: 'Review effort preset: "low", "medium", or "high" (1/2/3 review rounds per file). Seeded into ~/.opencodereview/config.json before the action runs; the pinned thxCode fork also exposes a native effort input, but seeding keeps working if the pin switches back to upstream. Empty falls back to "medium", which is also the OCR default.'
+        description: 'Review effort preset: "low", "medium", or "high" (1/2/3 review rounds per file). Passed to the action''s native effort input, which forwards it as `ocr review --effort`. Empty falls back to "medium", which is also the OCR default.'
         required: false
         type: string
         default: "medium"
@@ -261,30 +261,6 @@ jobs:
           # gopls is not auto-downloaded by Serena; pin it for reproducibility.
           go install golang.org/x/tools/gopls@v0.23.0
           echo "DEBUG: $(gopls version)"
-      - name: Seed OCR Effort
-        env:
-          INPUT_EFFORT: ${{ inputs.effort }}
-        run: |
-          # The composite action never passes --effort to `ocr review`, but OCR
-          # falls back to the "effort" key in ~/.opencodereview/config.json when
-          # the flag is absent. Seed it here; `ocr config set` merges by key
-          # (load-modify-save), so the action's own llm.* writes leave it intact
-          # (the same mechanism the MCP seeding below relies on). An unset
-          # caller variable arrives as "" and falls back to the OCR default;
-          # a non-empty invalid value fails fast instead of being ignored.
-          EFFORT="${INPUT_EFFORT:-medium}"
-          case "${EFFORT}" in
-            low|medium|high) ;;
-            *) echo "::error::effort must be one of low, medium, high (got '${INPUT_EFFORT}')"; exit 1 ;;
-          esac
-          CONFIG_DIR="${HOME}/.opencodereview"
-          CONFIG_FILE="${CONFIG_DIR}/config.json"
-          mkdir -p "${CONFIG_DIR}"
-          [[ -f "${CONFIG_FILE}" ]] || echo '{}' > "${CONFIG_FILE}"
-          jq --arg effort "${EFFORT}" '.effort = $effort' \
-            "${CONFIG_FILE}" > "${CONFIG_FILE}.tmp"
-          mv "${CONFIG_FILE}.tmp" "${CONFIG_FILE}"
-          echo "DEBUG: seeded effort=${EFFORT}"
       - name: Configure MCP Servers
         env:
           INPUT_ENABLE_SERENA: ${{ inputs.enable-serena }}
@@ -317,7 +293,10 @@ jobs:
           fi
           echo "DEBUG: seeded mcp_servers=$(jq -c '.mcp_servers' "${CONFIG_FILE}")"
       - name: Run OpenCodeReview
-        uses: thxCode/open-code-review@main
+        # Pinned to the upstream release carrying the review-control inputs
+        # used below (effort, max_tokens_budget, stream_progress,
+        # llm_reasoning_effort, route_severity_below, route_categories).
+        uses: alibaba/open-code-review@v1.11.6
         with:
           llm_url: ${{ inputs.llm-url }}
           llm_auth_token: ${{ secrets.llm-auth-token }}
@@ -327,6 +306,7 @@ jobs:
           language: ${{ inputs.language }}
           ocr_version: ${{ inputs.ocr-version }}
           review_concurrency: ${{ inputs.review-concurrency }}
+          effort: ${{ inputs.effort }}
           llm_timeout: ${{ inputs.llm-timeout }}
           review_task_timeout: ${{ inputs.review-task-timeout }}
           # Cap total token spend per review (input+output); on overflow
