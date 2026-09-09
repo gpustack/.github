@@ -170,20 +170,6 @@ on:
         required: true
 
 jobs:
-  debug-event:
-    # TEMPORARY diagnostic job: dump the inherited event context to verify
-    # whether workflow_call preserves the full github.event payload (not just
-    # github.event_name) inside the called workflow. Remove after diagnosis.
-    runs-on: ubuntu-latest
-    steps:
-      - run: |
-          echo "event_name=${{ github.event_name }}"
-          echo "comment_body=${{ github.event.comment.body }}"
-          echo "comment_author_association=${{ github.event.comment.author_association }}"
-          echo "comment_user_type=${{ github.event.comment.user.type }}"
-          echo "issue_pull_request=${{ github.event.issue.pull_request }}"
-          echo "full_event_json:"
-          echo '${{ toJSON(github.event) }}'
   review:
     # Run on PR events, or on human-authored comments starting with the trigger
     # keyword. Bot comments are excluded as a safety net: GITHUB_TOKEN already
