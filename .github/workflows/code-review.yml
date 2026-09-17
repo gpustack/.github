@@ -371,7 +371,7 @@ jobs:
         # Pinned to the upstream release carrying the review-control inputs
         # used below (effort, max_tokens_budget, stream_progress,
         # llm_reasoning_effort, route_severity_below, route_categories).
-        uses: alibaba/open-code-review@v1.11.6
+        uses: alibaba/open-code-review@v1.11.9
         with:
           llm_url: ${{ inputs.llm-url }}
           llm_auth_token: ${{ secrets.llm-auth-token }}
