@@ -405,10 +405,14 @@ jobs:
           if [[ "${INPUT_ENABLE_GITHUB_MCP}" == "true" ]]; then
             # The github server authenticates with the same App installation
             # token the action posts comments with — no new credential leaves
-            # the runner. The env map is stripped from the DEBUG echo below so
-            # the token cannot leak even if log masking regresses upstream.
+            # the runner. env must be a KEY=VALUE string array: OCR models it
+            # as []string (MCPServerConfig in config_cmd.go), and an object
+            # here fails config load with "cannot unmarshal object ... of type
+            # []string" and kills the review before it starts. The env entry
+            # is stripped from the DEBUG echo below so the token cannot leak
+            # even if log masking regresses upstream.
             jq --arg cmd "${HOME}/.local/bin/github-mcp-server" --arg tok "${GITHUB_MCP_TOKEN}" \
-              '.mcp_servers.github = {command: $cmd, args: ["stdio", "--read-only", "--toolsets", "pull_requests"], env: {GITHUB_PERSONAL_ACCESS_TOKEN: $tok}}' \
+              '.mcp_servers.github = {command: $cmd, args: ["stdio", "--read-only", "--toolsets", "pull_requests"], env: ["GITHUB_PERSONAL_ACCESS_TOKEN=" + $tok]}' \
               "${CONFIG_FILE}" > "${CONFIG_FILE}.tmp"
             mv "${CONFIG_FILE}.tmp" "${CONFIG_FILE}"
           fi
