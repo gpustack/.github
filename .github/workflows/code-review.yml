@@ -28,7 +28,9 @@
 # this workflow exists to remove.
 #
 # Required GitHub App permissions (configured on the App, not here): Pull requests:
-# Read and write, Contents: Read-only, Metadata: Read-only. The installation is resolved
+# Read and write, Contents: Read and write (write side needed only by
+# resolve_outdated: GitHub gates the review-thread resolve mutation on
+# repository write access), Metadata: Read-only. The installation is resolved
 # from the calling repository, so the App must be installed on each adopting repo.
 # (create-github-app-token has no installation-id input; it resolves the installation
 # from the caller repository, so no installation id is ever passed.)
@@ -39,9 +41,16 @@
 #
 # MCP servers for the review are seeded here as well (Configure MCP Servers step):
 # DeepWiki always (remote, auth-free), Serena by default (opt out via
-# enable-serena: "false"). The MCP config is written by this workflow only and
-# never read from PR-controlled files, keeping the pull_request_target safety
-# posture intact.
+# enable-serena: "false"), and the official github-mcp-server by default
+# (read-only build, pull_requests toolset only; opt out via enable-github-mcp:
+# "false"). The github server exists so the reviewer can read this PR's prior
+# review threads — including maintainer replies that declined or answered a
+# finding — before raising one: a rebase rewrites history, which invalidates
+# the checkpoint range and forces a full re-review, and without prior-thread
+# context the reviewer used to re-raise already-rejected findings round after
+# round (observed on gpustack-operator#488). The MCP config is written by this
+# workflow only and never read from PR-controlled files, keeping the
+# pull_request_target safety posture intact.
 
 name: Code Review
 
@@ -155,6 +164,16 @@ on:
         default: "15"
       enable-serena:
         description: '"false" skips the Serena MCP server (symbol navigation over the checked-out PR code). Language servers are auto-detected and set up by this workflow.'
+        required: false
+        type: string
+        default: "true"
+      enable-github-mcp:
+        description: '"false" skips the read-only github-mcp-server (prior PR review threads for the reviewer; see the static background passed to the action).'
+        required: false
+        type: string
+        default: "true"
+      resolve-outdated:
+        description: 'Forwarded to the action''s resolve_outdated input: "false" does nothing, "report" logs which outdated bot threads would be resolved, "true" resolves them (threads with human replies are never touched). "true" requires repository write access on the token the action posts with: here that is the GitHub App installation token, which carries Contents: write from the App registration (a plain GITHUB_TOKEN setup would instead need contents: write in the caller''s permissions block).'
         required: false
         type: string
         default: "true"
@@ -336,9 +355,26 @@ jobs:
           # gopls is not auto-downloaded by Serena; pin it for reproducibility.
           go install golang.org/x/tools/gopls@v0.23.0
           echo "DEBUG: $(gopls version)"
+      - name: Install github-mcp-server
+        if: inputs.enable-github-mcp == 'true'
+        run: |
+          # Official GitHub MCP server, pinned release + sha256 (same posture
+          # as the gopls pin above). Read-only mode with the pull_requests
+          # toolset exposes exactly three tools (list_pull_requests,
+          # pull_request_read, search_pull_requests); the reviewer uses
+          # pull_request_read to fetch prior review threads.
+          VERSION="1.12.2"
+          SHA256="95843162759da2c31dde082dd145be35db82164594796c294414b69790c2290e"
+          mkdir -p "${HOME}/.local/bin"
+          curl -fsSL "https://github.com/github/github-mcp-server/releases/download/v${VERSION}/github-mcp-server_Linux_x86_64.tar.gz" -o /tmp/github-mcp-server.tar.gz
+          echo "${SHA256}  /tmp/github-mcp-server.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/github-mcp-server.tar.gz -C "${HOME}/.local/bin" github-mcp-server
+          echo "DEBUG: $("${HOME}/.local/bin/github-mcp-server" --version | head -1)"
       - name: Configure MCP Servers
         env:
           INPUT_ENABLE_SERENA: ${{ inputs.enable-serena }}
+          INPUT_ENABLE_GITHUB_MCP: ${{ inputs.enable-github-mcp }}
+          GITHUB_MCP_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           # OpenCodeReview reads MCP servers only from ~/.opencodereview/config.json
           # at review startup; the composite action has no MCP input. OCR's
@@ -366,12 +402,24 @@ jobs:
               "${CONFIG_FILE}" > "${CONFIG_FILE}.tmp"
             mv "${CONFIG_FILE}.tmp" "${CONFIG_FILE}"
           fi
-          echo "DEBUG: seeded mcp_servers=$(jq -c '.mcp_servers' "${CONFIG_FILE}")"
+          if [[ "${INPUT_ENABLE_GITHUB_MCP}" == "true" ]]; then
+            # The github server authenticates with the same App installation
+            # token the action posts comments with — no new credential leaves
+            # the runner. The env map is stripped from the DEBUG echo below so
+            # the token cannot leak even if log masking regresses upstream.
+            jq --arg cmd "${HOME}/.local/bin/github-mcp-server" --arg tok "${GITHUB_MCP_TOKEN}" \
+              '.mcp_servers.github = {command: $cmd, args: ["stdio", "--read-only", "--toolsets", "pull_requests"], env: {GITHUB_PERSONAL_ACCESS_TOKEN: $tok}}' \
+              "${CONFIG_FILE}" > "${CONFIG_FILE}.tmp"
+            mv "${CONFIG_FILE}.tmp" "${CONFIG_FILE}"
+          fi
+          echo "DEBUG: seeded mcp_servers=$(jq -c '.mcp_servers | map_values(del(.env))' "${CONFIG_FILE}")"
       - name: Run OpenCodeReview
         # Pinned to the upstream release carrying the review-control inputs
         # used below (effort, max_tokens_budget, stream_progress,
-        # llm_reasoning_effort, route_severity_below, route_categories).
-        uses: alibaba/open-code-review@v1.11.9
+        # llm_reasoning_effort, route_severity_below, route_categories,
+        # resolve_outdated) plus the within-batch incremental dedup that
+        # landed after v1.11.9.
+        uses: alibaba/open-code-review@v1.12.7
         with:
           llm_url: ${{ inputs.llm-url }}
           llm_auth_token: ${{ secrets.llm-auth-token }}
@@ -384,6 +432,26 @@ jobs:
           effort: ${{ inputs.effort }}
           llm_timeout: ${{ inputs.llm-timeout }}
           review_task_timeout: ${{ inputs.review-task-timeout }}
+          # Static reviewer-context briefing. It must stay a constant string:
+          # the action folds background into the checkpoint fingerprint, so
+          # any per-run digest here would invalidate checkpoint_range on every
+          # run and force full reviews forever. (First deploy does trigger one
+          # config_changed full review per PR — expected, once.) The dynamic
+          # part lives behind the read-only github MCP server seeded above,
+          # which the fingerprint does not cover.
+          background: >-
+            This pull request may already have review rounds from this bot
+            (inline comments authored by a GitHub App bot account). If a
+            github MCP server is available in this run, use its
+            pull_request_read tool (methods get_review_comments / get_reviews)
+            to list this PR's existing review comments and their replies
+            before raising a finding. Do not re-raise a finding — same root
+            cause, even at a shifted line or in a sibling file — that a
+            maintainer declined, disputed, or already answered, unless the
+            underlying code changed materially since. Raising a genuinely new
+            problem is always welcome; repeating a rejected one is the worst
+            outcome of a re-review. If no github MCP server is available,
+            proceed without this check.
           # Cap total token spend per review (input+output); on overflow
           # dispatch stops, partial results are published, and the run exits 0.
           max_tokens_budget: ${{ inputs.max-tokens-budget }}
@@ -399,6 +467,11 @@ jobs:
           # Category routing is off by default; list categories to route them
           # to the summary (combines with the severity threshold on either).
           route_categories: ${{ inputs.route-categories }}
+          # "true": actually resolve the bot's outdated inline threads
+          # (threads with human replies are never touched). The resolve
+          # mutation requires repository write access; the App registration
+          # carries Contents: write. "report" downgrades this to log-only.
+          resolve_outdated: ${{ inputs.resolve-outdated }}
           # Dedup against already-posted bot comments and re-review only the
           # range since the last recorded checkpoint (sticky summary defaults
           # to true, satisfying checkpoint_range's prerequisite).
