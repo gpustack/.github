@@ -41,7 +41,7 @@
 #
 # MCP servers for the review are seeded here as well (Configure MCP Servers step):
 # DeepWiki always (remote, auth-free), Serena by default (opt out via
-# enable-serena: "false"), and the official github-mcp-server by default
+# enable-serena-mcp: "false"), and the official github-mcp-server by default
 # (read-only build, pull_requests toolset only; opt out via enable-github-mcp:
 # "false"). The github server exists so the reviewer can read this PR's prior
 # review threads — including maintainer replies that declined or answered a
@@ -162,7 +162,7 @@ on:
         required: false
         type: string
         default: "15"
-      enable-serena:
+      enable-serena-mcp:
         description: '"false" skips the Serena MCP server (symbol navigation over the checked-out PR code). Language servers are auto-detected and set up by this workflow.'
         required: false
         type: string
@@ -310,7 +310,7 @@ jobs:
           echo "DEBUG: llm-thinking=${TYPE} clear_thinking=${CLEAR} temperature=${INPUT_LLM_TEMPERATURE} top_p=${INPUT_LLM_TOP_P}"
       - name: Detect Serena Languages
         id: serena-langs
-        if: inputs.enable-serena == 'true'
+        if: inputs.enable-serena-mcp == 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
@@ -328,18 +328,18 @@ jobs:
           echo "languages=${LANGS}" >> "$GITHUB_OUTPUT"
           echo "DEBUG: serena-languages=${LANGS:-<none detected>}"
       - name: Set up uv
-        if: inputs.enable-serena == 'true'
+        if: inputs.enable-serena-mcp == 'true'
         uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
-      - name: Install Serena
-        if: inputs.enable-serena == 'true'
+      - name: Install Serena MCP
+        if: inputs.enable-serena-mcp == 'true'
         run: |
           # A wheel install (not uvx-from-source) keeps startup off the critical path.
           uv tool install -p 3.13 serena-agent
           echo "DEBUG: serena $(serena --version)"
       - name: Set up Go
-        if: inputs.enable-serena == 'true' && contains(steps.serena-langs.outputs.languages, 'go')
+        if: inputs.enable-serena-mcp == 'true' && contains(steps.serena-langs.outputs.languages, 'go')
         uses: actions/setup-go@v7
         with:
           # gopls only needs a current toolchain to build; the reviewed module's
@@ -350,12 +350,12 @@ jobs:
           # to key on; gopls's module download is simply paid per run.
           cache: false
       - name: Install gopls
-        if: inputs.enable-serena == 'true' && contains(steps.serena-langs.outputs.languages, 'go')
+        if: inputs.enable-serena-mcp == 'true' && contains(steps.serena-langs.outputs.languages, 'go')
         run: |
           # gopls is not auto-downloaded by Serena; pin it for reproducibility.
           go install golang.org/x/tools/gopls@v0.23.0
           echo "DEBUG: $(gopls version)"
-      - name: Install github-mcp-server
+      - name: Install Github MCP
         if: inputs.enable-github-mcp == 'true'
         run: |
           # Official GitHub MCP server, pinned release + sha256 (same posture
@@ -372,7 +372,7 @@ jobs:
           echo "DEBUG: $("${HOME}/.local/bin/github-mcp-server" --version | head -1)"
       - name: Configure MCP Servers
         env:
-          INPUT_ENABLE_SERENA: ${{ inputs.enable-serena }}
+          INPUT_ENABLE_SERENA: ${{ inputs.enable-serena-mcp }}
           INPUT_ENABLE_GITHUB_MCP: ${{ inputs.enable-github-mcp }}
           GITHUB_MCP_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
