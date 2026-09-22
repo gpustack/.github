@@ -487,13 +487,23 @@ jobs:
           fi
           echo "token=${SELECTED}" >> "${GITHUB_OUTPUT}"
       - name: Run OpenCodeReview
-        # Pinned to the upstream release carrying the review-control inputs
-        # used below (effort, max_tokens_budget, stream_progress,
-        # llm_reasoning_effort, route_severity_below, route_categories,
-        # resolve_outdated) plus the within-batch incremental dedup that
-        # landed after v1.11.9.
-        uses: alibaba/open-code-review@v1.12.7
+        # Fork build based on v1.12.8 with two patches on top
+        # (thxcode/open-code-review, branch v1.12.8-patched):
+        # 1. incremental dedup recognizes this App's own past comments via
+        #    the ocr comment marker — upstream isBotComment only matches
+        #    github-actions[bot] once getAuthenticatedLogin() 403s under an
+        #    App token, so dedup silently re-posted duplicates on every full
+        #    re-review;
+        # 2. the prior_context input (enabled below) fetches this PR's prior
+        #    review threads + maintainer replies and appends a digest to the
+        #    background, so a rebase-forced full re-review no longer
+        #    re-raises already-answered findings (gpustack-operator#503).
+        # Switch back to upstream once both land in a release.
+        uses: thxcode/open-code-review@v1.12.8-patched
         with:
+          # See the pin comment above: prior review context injected into the
+          # reviewer background, excluded from the checkpoint fingerprint.
+          prior_context: 'true'
           llm_url: ${{ inputs.llm-url }}
           # The probe-selected token (see Select LLM Token above), not the raw
           # comma-separated secret. Individual tokens are ::add-mask::ed there
@@ -513,21 +523,26 @@ jobs:
           # any per-run digest here would invalidate checkpoint_range on every
           # run and force full reviews forever. (First deploy does trigger one
           # config_changed full review per PR — expected, once.) The dynamic
-          # part lives behind the read-only github MCP server seeded above,
-          # which the fingerprint does not cover.
+          # part arrives through two channels the fingerprint does not cover:
+          # the action's prior_context digest appended below this text, and
+          # the read-only github MCP server seeded above as its fallback.
           background: >-
             This pull request may already have review rounds from this bot
-            (inline comments authored by a GitHub App bot account). If a
-            github MCP server is available in this run, use its
-            pull_request_read tool (methods get_review_comments / get_reviews)
-            to list this PR's existing review comments and their replies
-            before raising a finding. Do not re-raise a finding — same root
+            (inline comments authored by a GitHub App bot account). When a
+            "Prior review context" section follows below, it is the
+            authoritative record of what this bot already raised and how
+            maintainers answered: do not re-raise a finding — same root
             cause, even at a shifted line or in a sibling file — that a
-            maintainer declined, disputed, or already answered, unless the
-            underlying code changed materially since. Raising a genuinely new
-            problem is always welcome; repeating a rejected one is the worst
-            outcome of a re-review. If no github MCP server is available,
-            proceed without this check.
+            maintainer declined, disputed, already answered, or that was
+            marked resolved, unless the underlying code changed materially
+            since. When no such section is present and a github MCP server
+            is in this run's tool list, you MUST instead call its
+            pull_request_read tool (methods get_review_comments and
+            get_reviews) before raising any finding — phrased as a mere
+            suggestion, this check was skipped entirely and rejected
+            findings were re-raised round after round (gpustack-operator
+            #503). Raising a genuinely new problem is always welcome;
+            repeating a rejected one is the worst outcome of a re-review.
           # Cap total token spend per review (input+output); on overflow
           # dispatch stops, partial results are published, and the run exits 0.
           max_tokens_budget: ${{ inputs.max-tokens-budget }}
