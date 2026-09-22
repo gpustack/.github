@@ -51,6 +51,15 @@
 # round (observed on gpustack-operator#488). The MCP config is written by this
 # workflow only and never read from PR-controlled files, keeping the
 # pull_request_target safety posture intact.
+#
+# llm-auth-token may arrive as a comma-separated list of equivalent tokens. The
+# provider's quota is per token, and an exhausted weekly quota surfaces as HTTP
+# 429 mid-review, which burns every LLM retry and fails the run (provider error
+# code 1310, gpustack run 35594845656). The Select LLM Token step probes each
+# listed token with a 1-output-token streaming /chat/completions request and
+# hands the first token answering below HTTP 400 to the action — the last token
+# if every one answers an error, so an all-failing list fails exactly like a
+# single token would.
 
 name: Code Review
 
@@ -179,7 +188,7 @@ on:
         default: "true"
     secrets:
       llm-auth-token:
-        description: 'LLM API auth token.'
+        description: 'LLM API auth token, or a comma-separated list of equivalent tokens: a list is probed before the review with a minimal streaming /chat/completions request per token, the first answer below HTTP 400 wins, and the last token is used if all answer errors (same failure mode as a single token).'
         required: true
       app-id:
         description: 'GitHub App ID used to author review comments.'
@@ -417,6 +426,66 @@ jobs:
             mv "${CONFIG_FILE}.tmp" "${CONFIG_FILE}"
           fi
           echo "DEBUG: seeded mcp_servers=$(jq -c '.mcp_servers | map_values(del(.env))' "${CONFIG_FILE}")"
+      - name: Select LLM Token
+        id: llm-token
+        env:
+          LLM_AUTH_TOKENS: ${{ secrets.llm-auth-token }}
+          LLM_URL: ${{ inputs.llm-url }}
+          LLM_MODEL: ${{ inputs.llm-model }}
+        run: |
+          # llm-auth-token may be a comma-separated list of equivalent tokens
+          # (see the header comment for the 429 evidence). Probe each token
+          # with a minimal streaming chat request — max_tokens 1, so a healthy
+          # token costs one output token — and select the first that answers
+          # below HTTP 400; if every token answers an error, fall back to the
+          # last one so the failure mode is unchanged from a single-token
+          # setup. A probe that never got an HTTP response (curl 000, e.g. a
+          # transport failure) selects its token: the endpoint is shared by
+          # all tokens, so skipping would buy nothing. A non-OpenAI endpoint
+          # (llm-use-anthropic) 404s every probe and lands on the last token —
+          # still identical to not probing.
+          IFS=',' read -ra RAW_TOKENS <<< "${LLM_AUTH_TOKENS}"
+          TOKENS=()
+          for raw in "${RAW_TOKENS[@]}"; do
+            tok="$(printf '%s' "${raw}" | tr -d '[:space:]')"
+            if [[ -n "${tok}" ]]; then
+              echo "::add-mask::${tok}"
+              TOKENS+=("${tok}")
+            fi
+          done
+          COUNT="${#TOKENS[@]}"
+          if [[ "${COUNT}" -eq 0 ]]; then
+            echo "::error::llm-auth-token contained no usable token"
+            exit 1
+          fi
+          SELECTED=""
+          if [[ "${COUNT}" -eq 1 ]]; then
+            SELECTED="${TOKENS[0]}"
+            echo "DEBUG: single llm-auth-token configured; no probe needed"
+          else
+            ENDPOINT="${LLM_URL%/}/chat/completions"
+            BODY="$(jq -nc --arg model "${LLM_MODEL}" \
+              '{model: $model, stream: true, max_tokens: 1, messages: [{role: "user", content: "ping"}]}')"
+            for i in "${!TOKENS[@]}"; do
+              code="$(curl -sS -N -o /dev/null -w '%{http_code}' --max-time 90 \
+                -X POST "${ENDPOINT}" \
+                -H "Authorization: Bearer ${TOKENS[$i]}" \
+                -H 'Content-Type: application/json' \
+                -d "${BODY}" || true)"
+              if [[ "${code}" =~ ^[0-9]+$ ]] && (( 10#${code} >= 400 )); then
+                echo "DEBUG: token $((i + 1))/${COUNT} answered HTTP ${code} (>= 400); trying next"
+              else
+                SELECTED="${TOKENS[$i]}"
+                echo "DEBUG: token $((i + 1))/${COUNT} answered HTTP ${code}; selected"
+                break
+              fi
+            done
+            if [[ -z "${SELECTED}" ]]; then
+              SELECTED="${TOKENS[$((COUNT - 1))]}"
+              echo "DEBUG: all ${COUNT} tokens answered HTTP >= 400; falling back to the last token"
+            fi
+          fi
+          echo "token=${SELECTED}" >> "${GITHUB_OUTPUT}"
       - name: Run OpenCodeReview
         # Pinned to the upstream release carrying the review-control inputs
         # used below (effort, max_tokens_budget, stream_progress,
@@ -426,7 +495,10 @@ jobs:
         uses: alibaba/open-code-review@v1.12.7
         with:
           llm_url: ${{ inputs.llm-url }}
-          llm_auth_token: ${{ secrets.llm-auth-token }}
+          # The probe-selected token (see Select LLM Token above), not the raw
+          # comma-separated secret. Individual tokens are ::add-mask::ed there
+          # so the output value stays masked here.
+          llm_auth_token: ${{ steps.llm-token.outputs.token }}
           llm_model: ${{ inputs.llm-model }}
           llm_use_anthropic: ${{ inputs.llm-use-anthropic }}
           llm_extra_body: ${{ steps.thinking.outputs.extra_body }}
