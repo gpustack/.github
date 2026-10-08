@@ -487,8 +487,8 @@ jobs:
           fi
           echo "token=${SELECTED}" >> "${GITHUB_OUTPUT}"
       - name: Run OpenCodeReview
-        # Fork build based on v1.12.8 with two patches on top
-        # (thxcode/open-code-review, branch v1.12.8-patched):
+        # Fork build based on v1.12.12 with two patches on top
+        # (thxcode/open-code-review, branch v1.12.12-patched):
         # 1. incremental dedup recognizes this App's own past comments via
         #    the ocr comment marker — upstream isBotComment only matches
         #    github-actions[bot] once getAuthenticatedLogin() 403s under an
@@ -499,7 +499,7 @@ jobs:
         #    background, so a rebase-forced full re-review no longer
         #    re-raises already-answered findings (gpustack-operator#503).
         # Switch back to upstream once both land in a release.
-        uses: thxcode/open-code-review@v1.12.8-patched
+        uses: thxcode/open-code-review@v1.12.12-patched
         with:
           # See the pin comment above: prior review context injected into the
           # reviewer background, excluded from the checkpoint fingerprint.
