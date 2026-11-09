@@ -12,31 +12,31 @@ on:
   workflow_dispatch:
     inputs:
       images:
-        description: "Comma-separated SOURCE[=TARGET] entries; TARGET is [namespace/]name[:tag] or :tag, e.g. vllm/vllm-openai:v0.9.0,quay.io/org/image:v1=gpustack/image:v1-custom. A digest-only SOURCE (name@sha256:...) needs a target tag"
+        description: "Comma-separated SOURCE[=TARGET] entries, where TARGET is [namespace/]name[:tag] or :tag, e.g. vllm/vllm-openai:v1,quay.io/org/app:v1=app:v2. A SOURCE given only by digest requires a target tag. Images published by GPUStack are rejected."
         required: true
         type: string
       to_quay:
-        description: "Sync to Quay.io (default: true)"
+        description: "Sync to Quay.io"
         required: false
         default: true
         type: boolean
       to_swr:
-        description: "Sync to Huawei Cloud SWR (default: false)"
+        description: "Sync to Huawei Cloud SWR"
         required: false
         default: false
         type: boolean
       to_dockerhub:
-        description: "Sync to Docker Hub (default: false)"
+        description: "Sync to Docker Hub"
         required: false
         default: false
         type: boolean
       mirrored:
-        description: "Prepend the mirrored- prefix to target image names (default: false)"
+        description: "Add the mirrored- prefix to the target image name, unless TARGET sets a name"
         required: false
         default: false
         type: boolean
       overwrite:
-        description: "Overwrite target tags that already exist with a different digest (default: false)"
+        description: "Replace existing target tags whose digest differs from the source"
         required: false
         default: false
         type: boolean
@@ -108,6 +108,10 @@ jobs:
           SWR_HOST="${SWR_HOST#https://}"
           SWR_HOST="${SWR_HOST#http://}"
           SWR_HOST="${SWR_HOST%%/*}"
+
+          # Images published by GPUStack. For security, they can be neither a source nor a
+          # target under the gpustack namespace, and the overwrite input does not change that.
+          BLOCKED_IMAGES=(benchmark-runner gpustack gpustack-operator higress-plugins llm-router runner runtime ssh-server)
 
           AUTH_RE='unauthorized|denied|authentication required|status code 401|forbidden|status code 403'
           RATE_RE='toomanyrequests|too many requests|status code 429|rate limit'
@@ -276,6 +280,17 @@ jobs:
             else
               echo "$ns/$override"
             fi
+          }
+
+          # is_blocked <reference>: whether a fully qualified reference is a GPUStack image.
+          is_blocked() {
+            local path="${1#*/}" blocked
+            path="${path%%@*}"
+            [[ "${path##*/}" == *:* ]] && path="${path%:*}"
+            for blocked in "${BLOCKED_IMAGES[@]}"; do
+              [[ "${path,,}" == "gpustack/$blocked" ]] && return 0
+            done
+            return 1
           }
 
           # check_override <override>: print an error message for an invalid TARGET part.
@@ -479,6 +494,12 @@ jobs:
               [[ -n "${seen[$src=$override]:-}" ]] && continue
               seen[$src=$override]=1
 
+              if is_blocked "$src"; then
+                LAST_ERR="Images published by GPUStack cannot be synced with this workflow"
+                record failed "$src" "${override:--}" "" "Blocked source image"
+                continue
+              fi
+
               bad=$(check_override "$override")
               if [[ -n "$override" && -n "$bad" ]]; then
                 LAST_ERR="$bad"
@@ -504,6 +525,12 @@ jobs:
                 fi
 
                 dst=$(build_target "$src" "$ns" "$override")
+                if is_blocked "$dst"; then
+                  LAST_ERR="This target would replace an image published by GPUStack. Use another name, or enable mirrored."
+                  record failed "$src" "$dst" "" "Blocked target image"
+                  continue
+                fi
+
                 echo "::group::$src → $dst"
                 mirror_one "$src" "$dst"
                 echo "::endgroup::"
