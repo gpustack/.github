@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       images:
-        description: "Comma-separated SOURCE[=TARGET] entries, where TARGET is [namespace/]name[:tag] or :tag, e.g. vllm/vllm-openai:v1,quay.io/org/app:v1=app:v2. A SOURCE given only by digest requires a target tag. Images published by GPUStack are rejected."
+        description: "Comma-separated SOURCE[=TARGET] entries, where TARGET is [namespace/]name[:tag] or :tag, e.g. vllm/vllm-openai:v1,quay.io/org/app:v1=app:v2. A SOURCE given only by digest requires a target tag. Targets that would replace images published by GPUStack are rejected."
         required: true
         type: string
       to_quay:
@@ -109,8 +109,8 @@ jobs:
           SWR_HOST="${SWR_HOST#http://}"
           SWR_HOST="${SWR_HOST%%/*}"
 
-          # Images published by GPUStack. For security, they can be neither a source nor a
-          # target under the gpustack namespace, and the overwrite input does not change that.
+          # Images published by GPUStack. For security, these names cannot be a target under
+          # the gpustack namespace, and the overwrite input does not change that.
           BLOCKED_IMAGES=(benchmark-runner gpustack gpustack-operator higress-plugins llm-router runner runtime ssh-server)
 
           AUTH_RE='unauthorized|denied|authentication required|status code 401|forbidden|status code 403'
@@ -282,7 +282,7 @@ jobs:
             fi
           }
 
-          # is_blocked <reference>: whether a fully qualified reference is a GPUStack image.
+          # is_blocked <target>: whether a fully qualified target is a GPUStack image.
           is_blocked() {
             local path="${1#*/}" blocked
             path="${path%%@*}"
@@ -493,12 +493,6 @@ jobs:
               src=$(normalize "$img")
               [[ -n "${seen[$src=$override]:-}" ]] && continue
               seen[$src=$override]=1
-
-              if is_blocked "$src"; then
-                LAST_ERR="Images published by GPUStack cannot be synced with this workflow"
-                record failed "$src" "${override:--}" "" "Blocked source image"
-                continue
-              fi
 
               bad=$(check_override "$override")
               if [[ -n "$override" && -n "$bad" ]]; then
