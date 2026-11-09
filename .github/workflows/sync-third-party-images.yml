@@ -50,23 +50,15 @@ jobs:
     name: Sync Images
     runs-on: ubuntu-latest
     timeout-minutes: 180
-    env:
-      # Target locations. Adjust as needed.
-      QUAY_NAMESPACE: quay.io/gpustack
-      DOCKERHUB_NAMESPACE: docker.io/gpustack
-      SWR_ORG: gpustack            # The SWR registry host comes from the DOCKER_SWR_REGISTRY secret.
-      MIRRORED_PREFIX: mirrored-
     steps:
       # skopeo is preinstalled on GitHub-hosted Ubuntu runners.
       - name: 🔄 Sync Images
         env:
-          # Pass user inputs through env instead of inlining them into the script,
-          # to avoid shell injection.
+          # Inputs go through env instead of being inlined, to avoid shell injection.
           IMAGES: ${{ inputs.images }}
-          TARGETS: ${{ format('{0},{1},{2}', inputs.to_quay && 'quay' || '', inputs.to_swr && 'swr' || '', inputs.to_dockerhub && 'dockerhub' || '') }}
+          TARGETS: ${{ format('{0} {1} {2}', inputs.to_quay && 'quay' || '', inputs.to_swr && 'swr' || '', inputs.to_dockerhub && 'dockerhub' || '') }}
           MIRRORED: ${{ inputs.mirrored }}
           OVERWRITE: ${{ inputs.overwrite }}
-          # Credentials are only used for the registries actually involved.
           DOCKER_USER: ${{ secrets.DOCKER_USER }}
           DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
           DOCKER_QUAY_USER: ${{ secrets.DOCKER_QUAY_USER }}
@@ -75,463 +67,247 @@ jobs:
           DOCKER_SWR_USER: ${{ secrets.DOCKER_SWR_USER }}
           DOCKER_SWR_PASSWORD: ${{ secrets.DOCKER_SWR_PASSWORD }}
         run: |
-          # Sync container images between registries with skopeo.
-          #
-          # Login strategy:
-          #   - Source registries are accessed anonymously first. Login happens only when the
-          #     source answers 401/denied (private image) or 429 (rate limited), then the call is retried.
-          #   - Target registries are always logged in, since we need write access. A denial
-          #     raised by the target is a permission problem and is not retried.
-          #   - Each registry is logged in at most once per run.
-          #
-          # GitHub runs `run:` steps with `bash -e`. Turn -e off: several calls below are
-          # expected to fail and their exit codes are handled explicitly. -f disables globbing,
-          # since image lists are word-split below.
-          set +e -fuo pipefail
-
-          # ------------------------------------------------------------------------------
-          # Configuration
-          # ------------------------------------------------------------------------------
-
-          IMAGES="${IMAGES:-}"
-          TARGETS="${TARGETS:-quay}"
-          MIRRORED="${MIRRORED:-false}"
-          OVERWRITE="${OVERWRITE:-false}"
-          MIRRORED_PREFIX="${MIRRORED_PREFIX:-mirrored-}"
-          QUAY_NAMESPACE="${QUAY_NAMESPACE:-quay.io/gpustack}"
-          DOCKERHUB_NAMESPACE="${DOCKERHUB_NAMESPACE:-docker.io/gpustack}"
-          SWR_ORG="${SWR_ORG:-gpustack}"
-          SUMMARY="${GITHUB_STEP_SUMMARY:-/dev/stdout}"
+          # Failures are expected and handled per image, so turn off the default bash -e.
+          set +e -uo pipefail
 
           # Accept the SWR registry with or without a scheme or trailing path.
           SWR_HOST="${DOCKER_SWR_REGISTRY:-}"
-          SWR_HOST="${SWR_HOST#https://}"
-          SWR_HOST="${SWR_HOST#http://}"
+          SWR_HOST="${SWR_HOST#*://}"
           SWR_HOST="${SWR_HOST%%/*}"
 
-          # Images published by GPUStack. For security, these names cannot be a target under
-          # the gpustack namespace, and the overwrite input does not change that.
-          BLOCKED_IMAGES=(benchmark-runner gpustack gpustack-operator higress-plugins llm-router runner runtime ssh-server)
+          declare -A NAMESPACES=([quay]=quay.io/gpustack [dockerhub]=docker.io/gpustack)
+          [[ -n "$SWR_HOST" ]] && NAMESPACES[swr]="$SWR_HOST/gpustack"
 
+          # Images published by GPUStack must never be replaced; overwrite does not change that.
+          BLOCKED_RE='^gpustack/(benchmark-runner|gpustack|gpustack-operator|higress-plugins|llm-router|runner|runtime|ssh-server)$'
           AUTH_RE='unauthorized|denied|authentication required|status code 401|forbidden|status code 403'
           RATE_RE='toomanyrequests|too many requests|status code 429|rate limit'
 
-          # ------------------------------------------------------------------------------
-          # State
-          # ------------------------------------------------------------------------------
+          declare -A LOGGED_IN=()
+          ROWS=() PULLS=() FAILS=()
+          LAST_ERR=""
+          TMP=$(mktemp) ERR=$(mktemp)
 
-          declare -A LOGGED_IN=()      # registry host -> 1
-          LAST_ERR=""                  # error details of the last failure, shown in the summary
-          ROWS=()                      # result table rows
-          PULLS=()                     # images available at the target (for pull commands)
-          FAIL_TITLES=()
-          FAIL_DETAILS=()
-          N_SYNCED=0 N_FAILED=0
+          log() { echo "$*" >&2; }
+          err() { echo "::error::$*" >&2; }
 
-          log()  { echo "$*" >&2; }
-          err()  { echo "::error::$*" >&2; }
-          warn() { echo "::warning::$*" >&2; }
+          add_row() { ROWS+=("| $1 | \`$2\` | \`$3\` | ${4:+\`${4:7:12}\`} | $5 |"); }
 
-          # ------------------------------------------------------------------------------
-          # Results and job summary
-          # ------------------------------------------------------------------------------
+          # synced <source> <target> <digest> <note>
+          synced() { PULLS+=("$2"); add_row ✅ "$1" "$2" "$3" "$4"; }
 
-          # record <synced|failed> <source> <target> <digest> <note>
-          record() {
-            local icon
-            case "$1" in
-              synced)  icon="✅"; N_SYNCED=$((N_SYNCED + 1));   PULLS+=("$3") ;;
-              failed)  icon="❌"; N_FAILED=$((N_FAILED + 1))
-                       FAIL_TITLES+=("<code>$2</code> → <code>$3</code>: $5")
-                       FAIL_DETAILS+=("$LAST_ERR") ;;
-            esac
-            ROWS+=("| $icon | \`$2\` | \`$3\` | ${4:+\`${4:7:12}\`} | $5 |")
+          # failed <source> <target> <note> [details, default $LAST_ERR]
+          failed() {
+            local details
+            details=$(tail -n 20 <<< "${4:-${LAST_ERR:-(no further output)}}")
+            FAILS+=("<details><summary><code>$1</code> → <code>$2</code>: $3</summary>"$'\n\n```\n'"$details"$'\n```\n</details>')
+            add_row ❌ "$1" "$2" "" "$3"
           }
 
           write_summary() {
-            local mirrored_text i
-            if [[ "$MIRRORED" == true ]]; then mirrored_text="yes (\`${MIRRORED_PREFIX}\`)"; else mirrored_text="no"; fi
-
             {
-              echo "## 🔄 Third-party Image Sync Results"
-              echo
-
-              if [[ $N_FAILED -gt 0 ]]; then
-                echo "> [!CAUTION]"
-                echo "> **$N_FAILED** image(s) failed. See *Failure details* below."
-                echo
-              fi
-
-              echo "| ✅ Synced | ❌ Failed |"
-              echo "|:-:|:-:|"
-              echo "| $N_SYNCED | $N_FAILED |"
-              echo
-              echo "**Targets:** \`${TARGETS:-none}\` · **Mirrored prefix:** ${mirrored_text} · **Overwrite:** ${OVERWRITE}"
-              echo
-
-              if [[ ${#ROWS[@]} -gt 0 ]]; then
-                echo "### Details"
-                echo
-                echo "| | Source | Target | Digest | Note |"
-                echo "|:-:|---|---|---|---|"
+              printf '## 🔄 Third-party Image Sync Results\n\n'
+              printf '✅ %s synced · ❌ %s failed · **Targets:** `%s` · **Mirrored:** %s · **Overwrite:** %s\n' \
+                "${#PULLS[@]}" "${#FAILS[@]}" "$TARGETS" "$MIRRORED" "$OVERWRITE"
+              if ((${#ROWS[@]})); then
+                printf '\n### Details\n\n| | Source | Target | Digest | Note |\n|:-:|---|---|---|---|\n'
                 printf '%s\n' "${ROWS[@]}"
-                echo
               fi
-
-              if [[ ${#PULLS[@]} -gt 0 ]]; then
-                echo "### 📦 Pull commands"
-                echo
-                echo '```bash'
+              if ((${#PULLS[@]})); then
+                printf '\n### 📦 Pull commands\n\n```bash\n'
                 printf 'docker pull %s\n' "${PULLS[@]}"
-                echo '```'
-                echo
+                printf '```\n'
               fi
-
-              if [[ ${#FAIL_TITLES[@]} -gt 0 ]]; then
-                echo "### ❌ Failure details"
-                echo
-                for i in "${!FAIL_TITLES[@]}"; do
-                  echo "<details><summary>${FAIL_TITLES[$i]}</summary>"
-                  echo
-                  echo '```'
-                  printf '%s\n' "${FAIL_DETAILS[$i]:-(no further output)}" | tail -n 20
-                  echo '```'
-                  echo "</details>"
-                  echo
-                done
+              if ((${#FAILS[@]})); then
+                printf '\n### ❌ Failure details\n\n'
+                printf '%s\n\n' "${FAILS[@]}"
               fi
-            } >> "$SUMMARY"
+            } >> "$GITHUB_STEP_SUMMARY"
           }
 
-          # ------------------------------------------------------------------------------
-          # Image references
-          # ------------------------------------------------------------------------------
-
-          # Expand a short reference to a fully qualified one:
-          #   vllm/vllm-openai:tag -> docker.io/vllm/vllm-openai:tag
-          #   ubuntu               -> docker.io/library/ubuntu:latest
+          # Fully qualify a reference: ubuntu -> docker.io/library/ubuntu:latest
           normalize() {
-            local ref="${1#docker://}" first last
+            local ref="${1#docker://}" first
             first="${ref%%/*}"
             if [[ "$ref" != */* ]]; then
               ref="docker.io/library/$ref"
-            elif [[ "$first" != *.* && "$first" != *:* && "$first" != localhost ]]; then
+            elif [[ "$first" != *[.:]* && "$first" != localhost ]]; then
               ref="docker.io/$ref"
             fi
             ref="${ref/#index.docker.io\//docker.io/}"
-            last="${ref##*/}"
-            [[ "$last" != *:* && "$last" != *@* ]] && ref="$ref:latest"
+            [[ "${ref##*/}" == *[:@]* ]] || ref="$ref:latest"
             echo "$ref"
           }
 
-          host_of() { echo "${1%%/*}"; }
-
-          # Map a target alias to its namespace. Prints nothing for unknown/unconfigured targets.
-          namespace_of() {
-            case "$1" in
-              quay)      echo "$QUAY_NAMESPACE" ;;
-              dockerhub) echo "$DOCKERHUB_NAMESPACE" ;;
-              swr)       [[ -n "$SWR_HOST" ]] && echo "$SWR_HOST/$SWR_ORG" ;;
-            esac
-          }
-
-          # pull_ref <reference>: the reference to read from. skopeo rejects a reference that
-          # has both a tag and a digest, so name:tag@sha256:... becomes name@sha256:...
+          # skopeo rejects name:tag@digest, so read from name@digest instead.
           pull_ref() {
-            local ref="$1" repo
-            if [[ "$ref" != *@* ]]; then echo "$ref"; return; fi
-            repo="${ref%@*}"
-            [[ "${repo##*/}" == *:* ]] && repo="${repo%:*}"
-            echo "$repo@${ref##*@}"
+            local repo="${1%@*}"
+            [[ "$1" == *@* && "${repo##*/}" == *:* ]] && { echo "${repo%:*}@${1##*@}"; return; }
+            echo "$1"
           }
 
-          # build_target <source> <namespace> [override]
-          # Returns 1 when no target tag can be determined (digest-only source, no tag given).
-          # Without an override:  <namespace>/<prefix?><source name>:<source tag>
-          # With an override (the TARGET part of a SOURCE=TARGET entry), relative to the
-          # target registry:
-          #   :tag              -> <namespace>/<prefix?><source name>:tag
-          #   name[:tag]        -> <namespace>/name:<tag or source tag>
-          #   namespace/name[:tag] -> <registry host>/namespace/name:<tag or source tag>
-          # An explicit name is used as is, without the mirrored- prefix.
-          # The source namespace is dropped by default, so different sources may map to the
-          # same target; mirror_one refuses to overwrite a differing tag unless OVERWRITE=true.
+          valid_target() {
+            [[ "$1" != *@* && "$1" != /* && "$1" != */ && "$1" != *: ]] &&
+              [[ "$1" != */* || "${1%%/*}" != *[.:]* ]]
+          }
+
+          # build_target <source> <namespace> [target]
+          # target is :tag, name[:tag] or namespace/name[:tag]; the source name and tag fill
+          # in what it omits. Returns 1 when no tag can be determined (digest-only source).
           build_target() {
-            local src="$1" ns="${2%/}" override="${3:-}" last name tag=""
-            last="${src##*/}"
+            local ns="$2" target="${3:-}" last="${1##*/}" name tag=""
             last="${last%%@*}"
             name="${last%%:*}"
             [[ "$last" == *:* ]] && tag="${last##*:}"
 
-            if [[ -z "$override" || "$override" == :* ]]; then
-              [[ -n "$override" ]] && tag="${override#:}"
+            if [[ -z "$target" || "$target" == :* ]]; then
+              [[ -z "$target" ]] || tag="${target#:}"
+              [[ "$MIRRORED" == true ]] && name="mirrored-$name"
+              target="$name"
+            fi
+            if [[ "${target##*/}" != *:* ]]; then
               [[ -n "$tag" ]] || return 1
-              [[ "$MIRRORED" == true ]] && name="${MIRRORED_PREFIX}${name}"
-              echo "$ns/$name:$tag"
-              return
+              target="$target:$tag"
             fi
-
-            if [[ "${override##*/}" != *:* ]]; then
-              [[ -n "$tag" ]] || return 1
-              override="$override:$tag"
-            fi
-            if [[ "$override" == */* ]]; then
-              echo "$(host_of "$ns")/$override"
-            else
-              echo "$ns/$override"
-            fi
+            if [[ "$target" == */* ]]; then echo "${ns%%/*}/$target"; else echo "$ns/$target"; fi
           }
 
-          # is_blocked <target>: whether a fully qualified target is a GPUStack image.
-          is_blocked() {
-            local path="${1#*/}" blocked
-            path="${path%%@*}"
-            [[ "${path##*/}" == *:* ]] && path="${path%:*}"
-            for blocked in "${BLOCKED_IMAGES[@]}"; do
-              [[ "${path,,}" == "gpustack/$blocked" ]] && return 0
-            done
-            return 1
-          }
-
-          # check_override <override>: print an error message for an invalid TARGET part.
-          check_override() {
-            local o="$1"
-            if [[ "$o" == *@* ]]; then
-              echo "Target cannot be a digest reference"
-            elif [[ "$o" == */* && "${o%%/*}" == *[.:]* ]]; then
-              echo "Target must not include a registry host; the registry comes from the selected targets"
-            elif [[ "$o" == :* && -z "${o#:}" ]] || [[ "$o" == */ || "$o" == *: || "$o" == /* ]]; then
-              echo "Malformed target, expected [namespace/]name[:tag] or :tag"
-            fi
-          }
-
-          # ------------------------------------------------------------------------------
-          # Registry access
-          # ------------------------------------------------------------------------------
-
-          # login <host>
-          # Returns 0 on success, 1 if login failed (details in $LAST_ERR),
-          # 2 if no credentials are configured.
+          # Log in to a registry at most once. On failure, returns 1 with details in $LAST_ERR.
           login() {
             local host="$1" user="" pass="" out
             [[ -n "${LOGGED_IN[$host]:-}" ]] && return 0
-
-            if [[ "$host" == docker.io ]]; then
-              user="${DOCKER_USER:-}";      pass="${DOCKER_PASSWORD:-}"
-            elif [[ "$host" == quay.io ]]; then
-              user="${DOCKER_QUAY_USER:-}"; pass="${DOCKER_QUAY_PASSWORD:-}"
-            elif [[ -n "$SWR_HOST" && "$host" == "$SWR_HOST" ]]; then
-              user="${DOCKER_SWR_USER:-}";  pass="${DOCKER_SWR_PASSWORD:-}"
+            case "$host" in
+              docker.io)   user="$DOCKER_USER";      pass="$DOCKER_PASSWORD" ;;
+              quay.io)     user="$DOCKER_QUAY_USER"; pass="$DOCKER_QUAY_PASSWORD" ;;
+              "$SWR_HOST") user="$DOCKER_SWR_USER";  pass="$DOCKER_SWR_PASSWORD" ;;
+            esac
+            if [[ -z "$user" || -z "$pass" ]]; then
+              LAST_ERR="$host requires login, but no credentials are configured"
+              return 1
             fi
-            # Other registries are accessed anonymously only.
-            [[ -z "$user" || -z "$pass" ]] && return 2
-
             if ! out=$(printf '%s' "$pass" | skopeo login "$host" --username "$user" --password-stdin 2>&1); then
-              err "Failed to log in to $host, please check the credentials"
-              log "$out"
               LAST_ERR="Login to $host failed: $out"
+              err "Failed to log in to $host, please check the credentials"
               return 1
             fi
             LOGGED_IN[$host]=1
             log "🔑 Logged in to $host"
           }
 
-          # is_target_error <errfile> <src_host> <dst_host|->
-          # Whether a skopeo error was raised by the target registry rather than the source.
-          is_target_error() {
-            [[ "$3" == - ]] && return 1
-            grep -qi 'destination' "$1" && return 0
-            [[ "$3" != "$2" ]] && grep -qiF "$3" "$1"
-          }
-
           # with_auth <src_host> <dst_host|-> <command...>
-          # Run a command; when the source answers with an auth error or a rate limit, log in
-          # to <src_host> and retry. Stdout passes through, error output goes to $LAST_ERR.
-          # Called directly (not in a subshell) so the login state is preserved.
+          # Sources are read anonymously first: on 401/429 from the source, log in once and
+          # retry. A denial from the target is a permission problem and is not retried.
+          # Stdout passes through; error output ends up in $LAST_ERR.
           with_auth() {
-            local host="$1" dst_host="$2"; shift 2
-            local errfile attempt rc
-            errfile=$(mktemp)
-
+            local src_host="$1" dst_host="$2" attempt from_target target_re=destination
+            shift 2
+            [[ "$dst_host" == - || "$dst_host" == "$src_host" ]] || target_re+="|$dst_host"
             for attempt in 1 2 3 4; do
-              if "$@" 2>"$errfile"; then
-                rm -f "$errfile"; LAST_ERR=""; return 0
+              "$@" 2>"$ERR" && { LAST_ERR=""; return 0; }
+
+              from_target=false
+              grep -qiE "$target_re" "$ERR" && from_target=true
+
+              if [[ "$from_target" == false && -z "${LOGGED_IN[$src_host]:-}" ]] && grep -qiE "$AUTH_RE|$RATE_RE" "$ERR"; then
+                log "🔒 $src_host denied or rate limited anonymous access, trying to log in"
+                login "$src_host" && continue
+                echo "$LAST_ERR" >> "$ERR"
               fi
 
-              if grep -qiE "$RATE_RE" "$errfile"; then
-                if ! is_target_error "$errfile" "$host" "$dst_host" && [[ -z "${LOGGED_IN[$host]:-}" ]]; then
-                  log "⏳ Rate limited by $host, trying to log in"
-                  login "$host"; rc=$?
-                  [[ $rc == 0 ]] && continue
-                  [[ $rc == 2 ]] && warn "Rate limited by $host and no credentials configured, waiting before retry"
-                fi
-                [[ $attempt == 4 ]] && break
+              if grep -qiE "$RATE_RE" "$ERR" && ((attempt < 4)); then
                 sleep $((attempt * 30))
                 continue
               fi
-
-              if grep -qiE "$AUTH_RE" "$errfile"; then
-                if is_target_error "$errfile" "$host" "$dst_host"; then
-                  echo "Access denied by target $dst_host, check that the account can push (and create repositories) there" >> "$errfile"
-                elif [[ -z "${LOGGED_IN[$host]:-}" ]]; then
-                  log "🔒 $host requires authentication (private image?), trying to log in"
-                  login "$host"; rc=$?
-                  [[ $rc == 0 ]] && continue
-                  [[ $rc == 2 ]] && echo "$host requires login, but no credentials are configured" >> "$errfile"
-                fi
+              if [[ "$from_target" == true ]] && grep -qiE "$AUTH_RE" "$ERR"; then
+                echo "Access denied by target $dst_host, check that the account can push (and create repositories) there" >> "$ERR"
               fi
-
               break
             done
-
-            LAST_ERR=$(cat "$errfile"); rm -f "$errfile"
+            LAST_ERR=$(cat "$ERR")
             log "$LAST_ERR"
             return 1
           }
 
-          # digest_of <file>: digest of the raw manifest stored in <file>.
-          digest_of() { skopeo manifest-digest "$1" 2>/dev/null; }
+          sync_one() {
+            local shown="$1" dst="$2" src src_host dst_host src_digest dst_digest=""
+            src=$(pull_ref "$shown")
+            src_host="${src%%/*}"
+            dst_host="${dst%%/*}"
 
-          # ------------------------------------------------------------------------------
-          # Sync one image to one target
-          # ------------------------------------------------------------------------------
+            login "$dst_host" || { failed "$shown" "$dst" "Cannot log in to target registry"; return; }
+            with_auth "$src_host" - skopeo inspect --raw --retry-times 3 "docker://$src" >"$TMP" ||
+              { failed "$shown" "$dst" "Cannot read source manifest"; return; }
+            src_digest=$(skopeo manifest-digest "$TMP" 2>/dev/null)
 
-          mirror_one() {
-            local src dst="$2" rc src_host dst_host tmp src_digest dst_digest="" digest
-            src=$(pull_ref "$1")
-            src_host=$(host_of "$src")
-            dst_host=$(host_of "$dst")
-
-            # 1. Log in to the target (required for writing).
-            login "$dst_host"; rc=$?
-            if [[ $rc != 0 ]]; then
-              [[ $rc == 2 ]] && LAST_ERR="No credentials configured for $dst_host"
-              record failed "$src" "$dst" "" "Cannot log in to target registry"
-              return
+            # Different sources can map to the same target, so never replace a tag by accident.
+            if skopeo inspect --raw --retry-times 3 "docker://$dst" >"$TMP" 2>/dev/null; then
+              dst_digest=$(skopeo manifest-digest "$TMP" 2>/dev/null)
             fi
-
-            # 2. Resolve the source digest. The source is accessed anonymously first;
-            #    with_auth logs in on 401/429 and retries.
-            tmp=$(mktemp)
-            if ! with_auth "$src_host" - skopeo inspect --raw --retry-times 3 "docker://$src" >"$tmp"; then
-              rm -f "$tmp"
-              record failed "$src" "$dst" "" "Cannot read source manifest"
-              return
-            fi
-            src_digest=$(digest_of "$tmp")
-
-            # 3. Compare with the target. Skip when it is already identical, and refuse to
-            #    clobber a differing tag (e.g. one of gpustack's own images) unless asked to.
-            if skopeo inspect --raw --retry-times 3 "docker://$dst" >"$tmp" 2>/dev/null; then
-              dst_digest=$(digest_of "$tmp")
-            fi
-            rm -f "$tmp"
-            if [[ -n "$src_digest" && "$dst_digest" == "$src_digest" ]]; then
-              log "✅ Already up to date ($src_digest)"
-              record synced "$src" "$dst" "$src_digest" "Already up to date"
+            if [[ -n "$dst_digest" && "$dst_digest" == "$src_digest" ]]; then
+              synced "$shown" "$dst" "$src_digest" "Already up to date"
               return
             fi
             if [[ -n "$dst_digest" && "$OVERWRITE" != true ]]; then
-              LAST_ERR="Target has ${dst_digest}, source has ${src_digest:-unknown}. Enable overwrite to replace it, or enable mirrored to use a prefixed name."
-              record failed "$src" "$dst" "" "Target tag exists with a different digest"
+              failed "$shown" "$dst" "Target tag exists with a different digest" \
+                "Target has $dst_digest, source has ${src_digest:-unknown}. Enable overwrite to replace it, or enable mirrored to use a prefixed name."
               return
             fi
 
-            # 4. Copy.
-            #    --all               copy every architecture of multi-arch images
-            #    --preserve-digests  keep the digest identical to the source
-            #    Layers that already exist in the target are not uploaded again.
-            tmp=$(mktemp)
-            log "➡️ Copying..."
-            if ! with_auth "$src_host" "$dst_host" \
-                skopeo copy --all --preserve-digests --retry-times 3 --digestfile "$tmp" \
-                  "docker://$src" "docker://$dst"; then
-              rm -f "$tmp"
-              record failed "$src" "$dst" "" "Copy failed"
-              return
-            fi
-            digest=$(cat "$tmp"); rm -f "$tmp"
-
-            log "✅ Done ($digest)"
-            record synced "$src" "$dst" "$digest" "Synced"
+            with_auth "$src_host" "$dst_host" skopeo copy --all --preserve-digests --retry-times 3 \
+              --digestfile "$TMP" "docker://$src" "docker://$dst" || { failed "$shown" "$dst" "Copy failed"; return; }
+            synced "$shown" "$dst" "$(cat "$TMP")" "Synced"
           }
 
-          # ------------------------------------------------------------------------------
-          # Main
-          # ------------------------------------------------------------------------------
-
           main() {
-            local bin target_list img override bad src t ns dst
-            local -a entries=()
+            local entry target src t dst path
+            local -a entries targets
             local -A seen=()
 
-            for bin in skopeo; do
-              if ! command -v "$bin" >/dev/null; then
-                err "Missing dependency: $bin"; exit 1
-              fi
-            done
-
-            # Image references never contain whitespace, so strip it all; this also tolerates
-            # "a = b" and ", " in the input.
+            # References never contain whitespace; stripping it tolerates "a = b" and ", ".
             IFS=',' read -ra entries <<< "${IMAGES//[[:space:]]/}"
-            target_list=$(echo "$TARGETS" | tr ',' ' ')
-            # Normalize for display, e.g. ",swr," -> "swr".
-            # shellcheck disable=SC2086
-            TARGETS=$(echo $target_list | tr ' ' ',')
+            read -ra targets <<< "$TARGETS"
+            TARGETS="${targets[*]}"
 
-            if [[ -z "${IMAGES//[[:space:],]/}" ]]; then err "IMAGES is empty, please provide at least one image"; exit 1; fi
-            if [[ -z "${target_list// /}" ]]; then err "No target selected, please choose at least one target"; exit 1; fi
+            if [[ -z "${IMAGES//[[:space:],]/}" ]]; then err "Please provide at least one image"; exit 1; fi
+            if ((${#targets[@]} == 0)); then err "Please choose at least one target"; exit 1; fi
 
-            for img in "${entries[@]}"; do
-              [[ -z "$img" ]] && continue
-              override=""
-              if [[ "$img" == *=* ]]; then
-                override="${img#*=}"
-                img="${img%%=*}"
-              fi
+            for entry in "${entries[@]}"; do
+              [[ -n "$entry" ]] || continue
+              target=""
+              [[ "$entry" == *=* ]] && target="${entry#*=}"
+              src=$(normalize "${entry%%=*}")
+              [[ -z "${seen[$src=$target]:-}" ]] || continue
+              seen[$src=$target]=1
 
-              src=$(normalize "$img")
-              [[ -n "${seen[$src=$override]:-}" ]] && continue
-              seen[$src=$override]=1
-
-              bad=$(check_override "$override")
-              if [[ -n "$override" && -n "$bad" ]]; then
-                LAST_ERR="$bad"
-                record failed "$src" "$override" "" "Invalid target"
+              if [[ -n "$target" ]] && ! valid_target "$target"; then
+                failed "$src" "$target" "Invalid target" "Expected [namespace/]name[:tag] or :tag, without a registry host or digest"
                 continue
               fi
 
-              if ! build_target "$src" "registry/namespace" "$override" >/dev/null; then
-                LAST_ERR="A digest has no tag to reuse. Name one, e.g. vllm/vllm-openai@sha256:...=:v0.9.0"
-                record failed "$src" "${override:--}" "" "Cannot determine the target tag"
-                continue
-              fi
-
-              for t in $target_list; do
-                ns=$(namespace_of "$t")
-                if [[ -z "$ns" ]]; then
-                  case "$t" in
-                    swr) LAST_ERR="Secret DOCKER_SWR_REGISTRY is not configured" ;;
-                    *)   LAST_ERR="Valid targets: quay, swr, dockerhub" ;;
-                  esac
-                  record failed "$src" "$t" "" "Unknown or unconfigured target"
+              for t in "${targets[@]}"; do
+                if [[ -z "${NAMESPACES[$t]:-}" ]]; then
+                  failed "$src" "$t" "Unconfigured target" "Secret DOCKER_SWR_REGISTRY is not configured"
                   continue
                 fi
+                if ! dst=$(build_target "$src" "${NAMESPACES[$t]}" "$target"); then
+                  failed "$src" "${target:--}" "Cannot determine the target tag" "A digest has no tag to reuse. Name one, e.g. vllm/vllm-openai@sha256:...=:v1"
+                  continue 2
+                fi
 
-                dst=$(build_target "$src" "$ns" "$override")
-                if is_blocked "$dst"; then
-                  LAST_ERR="This target would replace an image published by GPUStack. Use another name, or enable mirrored."
-                  record failed "$src" "$dst" "" "Blocked target image"
+                path="${dst#*/}"
+                path="${path%:*}"
+                if [[ "${path,,}" =~ $BLOCKED_RE ]]; then
+                  failed "$src" "$dst" "Blocked target image" "This target would replace an image published by GPUStack. Use another name, or enable mirrored."
                   continue
                 fi
 
                 echo "::group::$src → $dst"
-                mirror_one "$src" "$dst"
+                sync_one "$src" "$dst"
                 echo "::endgroup::"
               done
             done
 
-            [[ $N_FAILED -eq 0 ]]
+            ((${#FAILS[@]} == 0))
           }
 
           trap write_summary EXIT
