@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       images:
-        description: "Comma-separated SOURCE[=TARGET] entries; TARGET is [namespace/]name[:tag] or :tag, e.g. vllm/vllm-openai:v0.9.0,quay.io/org/image:v1=gpustack/image:v1-custom"
+        description: "Comma-separated SOURCE[=TARGET] entries; TARGET is [namespace/]name[:tag] or :tag, e.g. vllm/vllm-openai:v0.9.0,quay.io/org/image:v1=gpustack/image:v1-custom. A digest-only SOURCE (name@sha256:...) needs a target tag"
         required: true
         type: string
       to_quay:
@@ -71,7 +71,6 @@ jobs:
           DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
           DOCKER_QUAY_USER: ${{ secrets.DOCKER_QUAY_USER }}
           DOCKER_QUAY_PASSWORD: ${{ secrets.DOCKER_QUAY_PASSWORD }}
-          DOCKER_QUAY_API_TOKEN: ${{ secrets.DOCKER_QUAY_API_TOKEN }}   # Optional
           DOCKER_SWR_REGISTRY: ${{ secrets.DOCKER_SWR_REGISTRY }}
           DOCKER_SWR_USER: ${{ secrets.DOCKER_SWR_USER }}
           DOCKER_SWR_PASSWORD: ${{ secrets.DOCKER_SWR_PASSWORD }}
@@ -232,7 +231,18 @@ jobs:
             esac
           }
 
+          # pull_ref <reference>: the reference to read from. skopeo rejects a reference that
+          # has both a tag and a digest, so name:tag@sha256:... becomes name@sha256:...
+          pull_ref() {
+            local ref="$1" repo
+            if [[ "$ref" != *@* ]]; then echo "$ref"; return; fi
+            repo="${ref%@*}"
+            [[ "${repo##*/}" == *:* ]] && repo="${repo%:*}"
+            echo "$repo@${ref##*@}"
+          }
+
           # build_target <source> <namespace> [override]
+          # Returns 1 when no target tag can be determined (digest-only source, no tag given).
           # Without an override:  <namespace>/<prefix?><source name>:<source tag>
           # With an override (the TARGET part of a SOURCE=TARGET entry), relative to the
           # target registry:
@@ -243,19 +253,24 @@ jobs:
           # The source namespace is dropped by default, so different sources may map to the
           # same target; mirror_one refuses to overwrite a differing tag unless OVERWRITE=true.
           build_target() {
-            local src="$1" ns="${2%/}" override="${3:-}" last name tag
+            local src="$1" ns="${2%/}" override="${3:-}" last name tag=""
             last="${src##*/}"
+            last="${last%%@*}"
             name="${last%%:*}"
-            tag="${last##*:}"
+            [[ "$last" == *:* ]] && tag="${last##*:}"
 
             if [[ -z "$override" || "$override" == :* ]]; then
               [[ -n "$override" ]] && tag="${override#:}"
+              [[ -n "$tag" ]] || return 1
               [[ "$MIRRORED" == true ]] && name="${MIRRORED_PREFIX}${name}"
               echo "$ns/$name:$tag"
               return
             fi
 
-            [[ "${override##*/}" != *:* ]] && override="$override:$tag"
+            if [[ "${override##*/}" != *:* ]]; then
+              [[ -n "$tag" ]] || return 1
+              override="$override:$tag"
+            fi
             if [[ "$override" == */* ]]; then
               echo "$(host_of "$ns")/$override"
             else
@@ -359,33 +374,6 @@ jobs:
             return 1
           }
 
-          # make_public <target>
-          # New Quay repositories are private by default. Robot accounts cannot change
-          # visibility, so an OAuth token is used through the Quay API. SWR visibility is
-          # managed in its console. Returns 1 when the image may not be anonymously pullable.
-          make_public() {
-            local repo
-            case "$1" in
-              quay.io/*)
-                [[ -n "${DOCKER_QUAY_API_TOKEN:-}" ]] || return 1
-                repo="${1#quay.io/}"
-                repo="${repo%%:*}"
-                if ! curl -fsS -X POST \
-                    -H "Authorization: Bearer ${DOCKER_QUAY_API_TOKEN}" \
-                    -H 'Content-Type: application/json' \
-                    -d '{"visibility":"public"}' \
-                    "https://quay.io/api/v1/repository/${repo}/changevisibility" >/dev/null; then
-                  warn "Could not make quay.io/${repo} public"
-                  return 1
-                fi
-                ;;
-              "$SWR_HOST"/*)
-                return 1
-                ;;
-            esac
-            return 0
-          }
-
           # digest_of <file>: digest of the raw manifest stored in <file>.
           digest_of() { skopeo manifest-digest "$1" 2>/dev/null; }
 
@@ -394,7 +382,8 @@ jobs:
           # ------------------------------------------------------------------------------
 
           mirror_one() {
-            local src="$1" dst="$2" rc src_host dst_host tmp src_digest dst_digest="" digest note
+            local src dst="$2" rc src_host dst_host tmp src_digest dst_digest="" digest
+            src=$(pull_ref "$1")
             src_host=$(host_of "$src")
             dst_host=$(host_of "$dst")
 
@@ -424,8 +413,7 @@ jobs:
             rm -f "$tmp"
             if [[ -n "$src_digest" && "$dst_digest" == "$src_digest" ]]; then
               log "✅ Already up to date ($src_digest)"
-              make_public "$dst" && note="Already up to date" || note="Already up to date, may be private"
-              record synced "$src" "$dst" "$src_digest" "$note"
+              record synced "$src" "$dst" "$src_digest" "Already up to date"
               return
             fi
             if [[ -n "$dst_digest" && "$OVERWRITE" != true ]]; then
@@ -449,9 +437,8 @@ jobs:
             fi
             digest=$(cat "$tmp"); rm -f "$tmp"
 
-            make_public "$dst" && note="Synced" || note="Synced, may be private"
             log "✅ Done ($digest)"
-            record synced "$src" "$dst" "$digest" "$note"
+            record synced "$src" "$dst" "$digest" "Synced"
           }
 
           # ------------------------------------------------------------------------------
@@ -492,16 +479,16 @@ jobs:
               [[ -n "${seen[$src=$override]:-}" ]] && continue
               seen[$src=$override]=1
 
-              if [[ "${src##*/}" == *@* ]]; then
-                LAST_ERR="Use a tag instead, e.g. vllm/vllm-openai:v0.9.0"
-                record failed "$src" "-" "" "Digest references cannot be mapped to a target tag"
-                continue
-              fi
-
               bad=$(check_override "$override")
               if [[ -n "$override" && -n "$bad" ]]; then
                 LAST_ERR="$bad"
                 record failed "$src" "$override" "" "Invalid target"
+                continue
+              fi
+
+              if ! build_target "$src" "registry/namespace" "$override" >/dev/null; then
+                LAST_ERR="A digest has no tag to reuse. Name one, e.g. vllm/vllm-openai@sha256:...=:v0.9.0"
+                record failed "$src" "${override:--}" "" "Cannot determine the target tag"
                 continue
               fi
 
