@@ -2,7 +2,7 @@ name: sync-gpustack-images
 
 on:
   schedule:
-    # Weekly: sync new dev images (diff against the latest release)
+    # Weekly: sync missing or changed images used by dev
     - cron: "25 18 * * 0"
     # Every 4 hours: sync only gpustack/gpustack:dev
     - cron: "45 */4 * * *"
@@ -19,7 +19,7 @@ on:
         default: false
         type: boolean
       full_sync:
-        description: "Sync all images of the target tag instead of only the diff (default: false)"
+        description: "Copy all images of the target tag even when destination digests match (default: false)"
         required: false
         default: false
         type: boolean
@@ -28,11 +28,10 @@ on:
         required: false
         default: ""
         type: string
-      diff_depth:
-        description: "How many releases to go back for the diff base, e.g. 2 skips a prerelease and compares against the release before it (default: 1)"
-        required: false
-        default: "1"
-        type: string
+
+defaults:
+  run:
+    shell: bash
 
 concurrency:
   group: ${{ github.workflow }}
@@ -43,81 +42,70 @@ jobs:
     name: Compare and Sync Images
     runs-on: ubuntu-latest
     steps:
-      - name: 🏷️ Fetch Latest Tags
-        id: get_tags
+      - name: 🔑 Login to Docker Hub (Improve API Limits)
+        if: inputs.docker_login == true
+        env:
+          DOCKER_USER: ${{ secrets.DOCKER_USER }}
+          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
         run: |
-          # How many releases to go back for the diff base. 1 (the default) compares against
-          # the immediately preceding release; a larger value skips that many releases, which
-          # is useful when the preceding ones are prereleases whose images were never synced.
-          DEPTH="${{ inputs.diff_depth }}"
-          DEPTH="${DEPTH:-1}"
-          if ! [[ "$DEPTH" =~ ^[1-9][0-9]*$ ]]; then
-            echo "::error::diff_depth must be a positive integer, got '$DEPTH'"
-            exit 1
-          fi
+          printf '%s' "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USER" docker.io --password-stdin
 
-          # Fetch the most recent release tags from the repository
-          TAGS=$(curl -s -H "Authorization: Bearer ${{ github.token }}" "https://api.github.com/repos/gpustack/gpustack/releases?page=1&per_page=$((DEPTH + 1))" | grep '"tag_name":' | awk -F'"' '{print $4}')
-          LATEST_TAG=$(echo "$TAGS" | head -n 1)
-          SECOND_LATEST_TAG=$(echo "$TAGS" | sed -n "$((DEPTH + 1))p")
-
-          if [[ "${{ inputs.dev }}" == 'true' || "${{ github.event_name }}" == 'schedule' ]]; then
-            # dev is not a release, so the base is one release closer to the top of the list
-            SECOND_LATEST_TAG=$(echo "$TAGS" | sed -n "${DEPTH}p")
+      - name: 🏷️ Determine Target Tag
+        env:
+          DEV: ${{ inputs.dev }}
+          EVENT_NAME: ${{ github.event_name }}
+          FORCE_SYNC: ${{ inputs.force_sync }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [[ -n "$FORCE_SYNC" ]]; then
+            LATEST_TAG=custom
+          elif [[ "$DEV" == 'true' || "$EVENT_NAME" == 'schedule' ]]; then
             LATEST_TAG=dev
+          else
+            LATEST_TAG=$(curl -fsS --retry 3 -H "Authorization: Bearer $GH_TOKEN" \
+              'https://api.github.com/repos/gpustack/gpustack/releases?page=1&per_page=1' | jq -er '.[0].tag_name // empty')
           fi
 
-          # Only the diff path needs a base tag; full_sync and force_sync ignore it
-          if [[ -z "$SECOND_LATEST_TAG" && "${{ inputs.full_sync }}" != 'true' && -z "${{ inputs.force_sync }}" ]]; then
-            echo "::error::No release found $DEPTH release(s) back to diff against"
-            exit 1
-          fi
-
-          echo "🚀 Latest tag: $LATEST_TAG"
-          echo "⏮️ Diff base tag ($DEPTH release(s) back): $SECOND_LATEST_TAG"
-
+          echo "🚀 Target tag: $LATEST_TAG"
           echo "LATEST_TAG=$LATEST_TAG" >> "$GITHUB_ENV"
-          echo "SECOND_LATEST_TAG=$SECOND_LATEST_TAG" >> "$GITHUB_ENV"
 
       - name: 🔍 Determine Images to Sync
-        id: get_images
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SCHEDULE: ${{ github.event.schedule }}
+          FORCE_SYNC: ${{ inputs.force_sync }}
         run: |
           # Build the list of images to sync based on the trigger and inputs
-          if [[ "${{ github.event_name }}" == 'schedule' && "${{ github.event.schedule }}" == '45 */4 * * *' ]]; then
+          if [[ "$EVENT_NAME" == 'schedule' && "$EVENT_SCHEDULE" == '45 */4 * * *' ]]; then
             # Every-4-hours schedule: only sync gpustack/gpustack:dev
             IMAGES_TO_SYNC="gpustack/gpustack:dev"
-          elif [ -n "${{ inputs.force_sync }}" ]; then
+          elif [[ -n "$FORCE_SYNC" ]]; then
             # Force sync: only the specified images (comma-separated name:tag, gpustack/ namespace prepended)
-            IMAGES_TO_SYNC=$(echo "${{ inputs.force_sync }}" | tr ',' '\n' | \
+            IMAGES_TO_SYNC=$(printf '%s\n' "$FORCE_SYNC" | tr ',' '\n' | \
               sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | sed '/^$/d' | sed 's#^#gpustack/#' | awk '!seen[$0]++')
             echo "🔧 Force-sync images requested:"
             echo "$IMAGES_TO_SYNC"
-          elif [[ "${{ inputs.full_sync }}" == 'true' ]]; then
-            # Full sync: all images of the target tag
-            IMAGES_TO_SYNC=$(docker run -q --rm --entrypoint gpustack gpustack/gpustack:"$LATEST_TAG" list-images | uniq || true)
           else
-            # Default: diff between the two tags
-            IMAGES_TO_SYNC=$(grep -Fvf \
-              <(docker run -q --rm --entrypoint gpustack gpustack/gpustack:"$SECOND_LATEST_TAG" list-images) \
-              <(docker run -q --rm --entrypoint gpustack gpustack/gpustack:"$LATEST_TAG" list-images) | \
-              uniq || true)
+            # Check every target image so mutable tags are compared even when their names stay the same.
+            IMAGES_TO_SYNC=$(docker run -q --rm --pull=always --entrypoint gpustack \
+              gpustack/gpustack:"$LATEST_TAG" list-images | sed '/^$/d' | awk '!seen[$0]++')
           fi
 
           # On release syncs (manual dispatch with dev=false), also sync gpustack/gpustack:latest.
           # Schedules set LATEST_TAG=dev, so they are excluded; force_sync uses an explicit list.
-          if [[ "$LATEST_TAG" != 'dev' && -z "${{ inputs.force_sync }}" ]]; then
+          if [[ "$LATEST_TAG" != 'dev' && -z "$FORCE_SYNC" ]]; then
             echo "🏷️ Release sync: including gpustack/gpustack:latest"
             IMAGES_TO_SYNC=$(printf '%s\n' "$IMAGES_TO_SYNC" "gpustack/gpustack:latest" | sed '/^$/d' | awk '!seen[$0]++')
           fi
 
           if [ -z "$IMAGES_TO_SYNC" ]; then
-            echo "✅ No new images found for synchronization."
-            echo "HAS_NEW_IMAGES=false" >> "$GITHUB_ENV"
+            echo "✅ No images found for synchronization."
+            echo "HAS_IMAGES=false" >> "$GITHUB_ENV"
           else
             echo "📦 Images identified for synchronization:"
             echo "$IMAGES_TO_SYNC"
           
-            echo "HAS_NEW_IMAGES=true" >> "$GITHUB_ENV"
+            echo "HAS_IMAGES=true" >> "$GITHUB_ENV"
           
             {
               echo "IMAGES_TO_SYNC<<EOF"
@@ -127,45 +115,57 @@ jobs:
           
             # Initialize the Job Summary header
             echo "### 🔄 Image Synchronization Report" >> "$GITHUB_STEP_SUMMARY"
-            echo "Target tag: \`$LATEST_TAG\` · Diff base tag: \`$SECOND_LATEST_TAG\`" >> "$GITHUB_STEP_SUMMARY"
-            echo "The following images were identified and synced:" >> "$GITHUB_STEP_SUMMARY"
+            echo "Target tag: \`$LATEST_TAG\`" >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - name: 🔑 Login to Docker Hub (Improve API Limits)
-        if: env.HAS_NEW_IMAGES == 'true' && inputs.docker_login == 'true'
+      - name: 🔄 Compare Digests and Sync to Quay.io / SWR
+        if: env.HAS_IMAGES == 'true'
+        env:
+          FULL_SYNC: ${{ inputs.full_sync }}
+          FORCE_SYNC: ${{ inputs.force_sync }}
+          DOCKER_QUAY_USER: ${{ secrets.DOCKER_QUAY_USER }}
+          DOCKER_QUAY_PASSWORD: ${{ secrets.DOCKER_QUAY_PASSWORD }}
+          DOCKER_SWR_REGISTRY: ${{ secrets.DOCKER_SWR_REGISTRY }}
+          DOCKER_SWR_USER: ${{ secrets.DOCKER_SWR_USER }}
+          DOCKER_SWR_PASSWORD: ${{ secrets.DOCKER_SWR_PASSWORD }}
         run: |
-          # Log in to Docker Hub to raise the pull rate limit
-          echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USER }}" docker.io --password-stdin
+          printf '%s' "$DOCKER_QUAY_PASSWORD" | skopeo login -u "$DOCKER_QUAY_USER" quay.io --password-stdin
+          printf '%s' "$DOCKER_SWR_PASSWORD" | skopeo login -u "$DOCKER_SWR_USER" "$DOCKER_SWR_REGISTRY" --password-stdin
 
-      - name: 🔄 Sync to Quay.io
-        if: env.HAS_NEW_IMAGES == 'true'
-        run: |
-          # Sync each identified image to Quay.io
-          echo "${{ secrets.DOCKER_QUAY_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_QUAY_USER }}" quay.io --password-stdin
-          
-          echo "#### 🟢 Quay.io" >> "$GITHUB_STEP_SUMMARY"
-          
-          echo "$IMAGES_TO_SYNC" | while read -r image; do
-            if [ -z "$image" ]; then continue; fi
-            echo "➡️ Syncing: $image"
-            skopeo copy --all --retry-times 3 "docker://${image}" "docker://quay.io/${image}" 
-          
-            # Append success status to Job Summary
-            echo "- ✅ \`$image\`" >> "$GITHUB_STEP_SUMMARY"
-          done
+          MANIFEST=$(mktemp)
+          trap 'rm -f "$MANIFEST"' EXIT
 
-      - name: 🔄 Sync to SWR
-        if: env.HAS_NEW_IMAGES == 'true'
-        run: |
-          # Sync each identified image to SWR
-          echo "${{ secrets.DOCKER_SWR_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_SWR_USER }}" "${{ secrets.DOCKER_SWR_REGISTRY }}" --password-stdin
-          
-          echo "#### 🔵 SWR" >> "$GITHUB_STEP_SUMMARY"
-          
-          echo "$IMAGES_TO_SYNC" | while read -r image; do
-            if [ -z "$image" ]; then continue; fi
-            echo "➡️ Syncing: $image"
-            skopeo copy --all --retry-times 3 "docker://${image}" "docker://${{ secrets.DOCKER_SWR_REGISTRY }}/${image}"
-          
-            echo "- ✅ \`$image\`" >> "$GITHUB_STEP_SUMMARY"
-          done
+          # Hash the raw top-level manifest/index so changes to any architecture are detected.
+          get_digest() {
+            skopeo inspect --raw --retry-times 3 "docker://$1" > "$MANIFEST" || return 1
+            skopeo manifest-digest "$MANIFEST"
+          }
+
+          printf '\n| Image | Registry | Result |\n|---|---|---|\n' >> "$GITHUB_STEP_SUMMARY"
+
+          while read -r image; do
+            [[ -n "$image" ]] || continue
+            source_digest=$(get_digest "$image")
+            # Pin both copies to the inspected digest in case the source tag moves during this run.
+            source_ref="${image%:*}@$source_digest"
+
+            for registry in quay.io "$DOCKER_SWR_REGISTRY"; do
+              target="$registry/$image"
+              if [[ "$FULL_SYNC" != 'true' && -z "$FORCE_SYNC" ]]; then
+                if target_digest=$(get_digest "$target"); then
+                  if [[ "$source_digest" == "$target_digest" ]]; then
+                    echo "✅ Up to date: $target ($source_digest)"
+                    printf '| `%s` | `%s` | Already up to date |\n' "$image" "$registry" >> "$GITHUB_STEP_SUMMARY"
+                    continue
+                  fi
+                  echo "🔄 Digest changed: $target ($target_digest → $source_digest)"
+                else
+                  echo "::warning::Cannot read destination digest for $target; attempting copy"
+                fi
+              fi
+
+              echo "➡️ Syncing: $image → $target ($source_digest)"
+              skopeo copy --all --preserve-digests --retry-times 3 "docker://$source_ref" "docker://$target"
+              printf '| `%s` | `%s` | Synced |\n' "$image" "$registry" >> "$GITHUB_STEP_SUMMARY"
+            done
+          done <<< "$IMAGES_TO_SYNC"
